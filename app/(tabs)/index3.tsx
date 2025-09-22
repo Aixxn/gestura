@@ -3,7 +3,6 @@ import React from 'react';
 import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
 // --- Color Palette ---
-// Derived from your "Gestura" system image and "ASL Bloom" for the accent color.
 const COLORS = {
   primaryBlue: '#ffffffff', 
   accentBlue: '#0917b4ff', 
@@ -123,11 +122,11 @@ const styles = StyleSheet.create({
 });
 
 
-const GesturaLandingPage = () => {
+const GesturaLastPage = () => {
   const router = useRouter();
 
   const handleGetStarted = () => {
-    router.push('/(tabs)/index2');
+    router.push('/(tabs)/camera');
   };
 
   return (
@@ -145,28 +144,28 @@ const GesturaLandingPage = () => {
       <View style={styles.content}>
         {/* --- Welcome Text --- */}
         <Text style={styles.title}>
-          Welcome to Gestura <Text></Text>
+        Gestura <Text></Text>
         </Text>
         <Text style={styles.subtitle}>
-          Real-time conversations that matter, bringing you closer with every sign.
+            Thank you for trying Gestura. We hope it enhances your communication experience.
         </Text>       
         {/* --- Page Indicator Dots --- */}
         <View style={styles.dotsContainer}>
+          <View style={styles.dot} />
+          <View style={styles.dot} />
           <View style={[styles.dot, styles.dotActive]} />
-          <View style={styles.dot} />
-          <View style={styles.dot} />
         </View>
       </View>
 
       {/* --- Bottom Buttons --- */}
       <View style={styles.bottomActions}>
         <TouchableOpacity style={styles.primaryButton} onPress={handleGetStarted}>
-          <Text style={styles.primaryButtonText}>Get started</Text>
+          <Text style={styles.primaryButtonText}>Continue</Text>
         </TouchableOpacity>
       </View>
     </ScrollView>
   );
 };
 
-export default GesturaLandingPage;
+export default GesturaLastPage;
 

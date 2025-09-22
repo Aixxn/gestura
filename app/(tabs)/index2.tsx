@@ -123,11 +123,11 @@ const styles = StyleSheet.create({
 });
 
 
-const GesturaLandingPage = () => {
+const GesturaNextPage = () => {
   const router = useRouter();
 
   const handleGetStarted = () => {
-    router.push('/(tabs)/index2');
+    router.push('/(tabs)/index3');
   };
 
   return (
@@ -145,15 +145,15 @@ const GesturaLandingPage = () => {
       <View style={styles.content}>
         {/* --- Welcome Text --- */}
         <Text style={styles.title}>
-          Welcome to Gestura <Text></Text>
+        Gestura <Text></Text>
         </Text>
         <Text style={styles.subtitle}>
-          Real-time conversations that matter, bringing you closer with every sign.
+            This system is operated by three Computer Science Students.
         </Text>       
         {/* --- Page Indicator Dots --- */}
         <View style={styles.dotsContainer}>
-          <View style={[styles.dot, styles.dotActive]} />
           <View style={styles.dot} />
+          <View style={[styles.dot, styles.dotActive]} />
           <View style={styles.dot} />
         </View>
       </View>
@@ -161,12 +161,12 @@ const GesturaLandingPage = () => {
       {/* --- Bottom Buttons --- */}
       <View style={styles.bottomActions}>
         <TouchableOpacity style={styles.primaryButton} onPress={handleGetStarted}>
-          <Text style={styles.primaryButtonText}>Get started</Text>
+          <Text style={styles.primaryButtonText}>Continue</Text>
         </TouchableOpacity>
       </View>
     </ScrollView>
   );
 };
 
-export default GesturaLandingPage;
+export default GesturaNextPage;
 
