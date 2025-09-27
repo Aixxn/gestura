@@ -1,6 +1,6 @@
 import { useRouter } from 'expo-router';
 import React from 'react';
-import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ImageBackground, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
 // --- Color Palette ---
 // Derived from your "Gestura" system image and "ASL Bloom" for the accent color.
@@ -20,7 +20,15 @@ const COLORS = {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: COLORS.background,
+  },
+  backgroundImage: {
+    flex:1,
+    width: '100%',
+    height: '100%',
+  },
+  overlay: {
+    flex: 1,
+    backgroundColor: 'rgba(10, 44, 138, 0.14)', // Semi-transparent overlay to maintain text readability
   },
   topBar: {
     flexDirection: 'row',
@@ -50,7 +58,6 @@ const styles = StyleSheet.create({
     fontWeight: '300',
   },
   content: {
-    flex: 1,
     alignItems: 'center',
     paddingHorizontal: 30,
     paddingVertical: 20,
@@ -60,7 +67,7 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: COLORS.textPrimary,
     textAlign: 'center',
-    marginTop: 250,
+    marginTop: 130,
     marginBottom: 0,
   },
   subtitle: {
@@ -68,6 +75,7 @@ const styles = StyleSheet.create({
     color: COLORS.textSecondary,
     textAlign: 'center',
     marginTop: 15,
+    marginBottom: 180,
     lineHeight: 24,
     maxWidth: '90%',
   },
@@ -131,40 +139,48 @@ const GesturaLandingPage = () => {
   };
 
   return (
-    <ScrollView style={styles.container}>
-      {/* --- Top Bar: Logo and Close Button --- */}
-      <View style={styles.topBar}>
-        <View style={styles.logoContainer}>
-          <Text style={styles.logoIcon}></Text>
-        </View>
-        <TouchableOpacity style={styles.closeButton}>
-          <Text style={styles.closeIcon}>×</Text>
-        </TouchableOpacity>
-      </View>
+    <ImageBackground 
+      source={require('../../images/background.png')} 
+      style={styles.backgroundImage}
+      resizeMode="cover"
+    >
+      <View style={styles.overlay}>
+        <View style={styles.container}>
+          {/* --- Top Bar: Logo and Close Button --- */}
+          <View style={styles.topBar}>
+            <View style={styles.logoContainer}>
+              <Text style={styles.logoIcon}></Text>
+            </View>
+            <TouchableOpacity style={styles.closeButton}>
+              <Text style={styles.closeIcon}>×</Text>
+            </TouchableOpacity>
+          </View>
 
-      <View style={styles.content}>
-        {/* --- Welcome Text --- */}
-        <Text style={styles.title}>
-          Welcome to Gestura <Text></Text>
-        </Text>
-        <Text style={styles.subtitle}>
-          Real-time conversations that matter, bringing you closer with every sign.
-        </Text>       
-        {/* --- Page Indicator Dots --- */}
-        <View style={styles.dotsContainer}>
-          <View style={[styles.dot, styles.dotActive]} />
-          <View style={styles.dot} />
-          <View style={styles.dot} />
+          <View style={styles.content}>
+            {/* --- Welcome Text --- */}
+            <Text style={styles.title}>
+              Welcome to Gestura <Text></Text>
+            </Text>
+            <Text style={styles.subtitle}>
+              Real-time conversations that matter, bringing you closer with every sign.
+            </Text>       
+            {/* --- Page Indicator Dots --- */}
+            <View style={styles.dotsContainer}>
+              <View style={[styles.dot, styles.dotActive]} />
+              <View style={styles.dot} />
+              <View style={styles.dot} />
+            </View>
+          </View>
+
+          {/* --- Bottom Buttons --- */}
+          <View style={styles.bottomActions}>
+            <TouchableOpacity style={styles.primaryButton} onPress={handleGetStarted}>
+              <Text style={styles.primaryButtonText}>Get started</Text>
+            </TouchableOpacity>
+          </View>
         </View>
       </View>
-
-      {/* --- Bottom Buttons --- */}
-      <View style={styles.bottomActions}>
-        <TouchableOpacity style={styles.primaryButton} onPress={handleGetStarted}>
-          <Text style={styles.primaryButtonText}>Get started</Text>
-        </TouchableOpacity>
-      </View>
-    </ScrollView>
+    </ImageBackground>
   );
 };
 
