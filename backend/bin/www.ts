@@ -4,9 +4,11 @@
  * Module dependencies.
  */
 
-var app = require('../app');
-var debug = require('debug')('backend:server');
-var http = require('http');
+import debugModule from 'debug';
+import app from '@src/app';
+import http from 'http';
+
+const debug = debugModule('backend:server');
 
 /**
  * Get port from environment and store in Express.
@@ -33,7 +35,7 @@ server.on('listening', onListening);
  * Normalize a port into a number, string, or false.
  */
 
-function normalizePort(val) {
+function normalizePort(val: any) {
   var port = parseInt(val, 10);
 
   if (isNaN(port)) {
@@ -53,7 +55,7 @@ function normalizePort(val) {
  * Event listener for HTTP server "error" event.
  */
 
-function onError(error) {
+function onError(error: any) {
   if (error.syscall !== 'listen') {
     throw error;
   }
@@ -83,6 +85,10 @@ function onError(error) {
 
 function onListening() {
   var addr = server.address();
+  if(addr === null){
+    console.error('Server address is null');
+    return;
+  }
   var bind = typeof addr === 'string'
     ? 'pipe ' + addr
     : 'port ' + addr.port;

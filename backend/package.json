@@ -3,16 +3,32 @@
   "version": "0.0.0",
   "description": "backend for gestura.",
   "private": true,
+  "type": "CommonJS",
   "scripts": {
-    "start": "node ./bin/www"
+    "start": "node dist/bin/www.js",
+    "build": "rm -rf dist && tsc && tsc-alias",
+    "dev": "nodemon --exec ts-node -r tsconfig-paths/register ./bin/www.ts"
   },
   "author": "baronocasiones",
   "dependencies": {
     "cookie-parser": "~1.4.4",
     "debug": "~2.6.9",
-    "express": "~4.16.1",
+    "express": "^4.21.2",
     "http-errors": "~1.6.3",
-    "jade": "~1.11.0",
-    "morgan": "~1.9.1"
+    "jade": "^0.29.0",
+    "morgan": "^1.10.1"
+  },
+  "devDependencies": {
+    "@types/cookie-parser": "^1.4.9",
+    "@types/debug": "^4.1.12",
+    "@types/express": "^5.0.3",
+    "@types/http-errors": "^2.0.5",
+    "@types/morgan": "^1.9.10",
+    "@types/node": "^24.7.1",
+    "nodemon": "^3.1.10",
+    "ts-node": "^10.9.2",
+    "tsc-alias": "^1.8.16",
+    "tsconfig-paths": "^4.2.0",
+    "typescript": "^5.9.3"
   }
 }
