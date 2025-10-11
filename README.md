@@ -3,14 +3,38 @@
 This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
 
 ## Get started
+For backend:
+1. Go to the backend directory:
+    ```bash
+    cd backend
+    ```
+2. Install dependencies:
+    ```bash
+    npm install
+    ```
 
+4. Compile TypeScript:
+    ```bash
+    npm run build
+    ```
+
+5. start:
+If staring during development:
+    ```bash
+    npm run dev
+    ```
+
+If starting the deployment server:
+    ```bash
+    npm start
+    ```
 
 For frontend:
-1. Go to the backend directory
+1. Go to the frontend directory
 
-```bash
-cd frontend
-```
+    ```bash
+    cd frontend
+    ```
 
 2. Install dependencies
 
