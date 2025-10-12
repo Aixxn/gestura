@@ -13,10 +13,10 @@ const upload = multer();
 })();
 
 router.get('/convert', upload.single('rawImage'), async (req, res) => {
-    while(!req.body.stop){
+    while (!req.body.stop) {
         await producer.send({
             topic: 'rawImageData',
-            messages: [{value: JSON.stringify(req.file)}]
+            messages: [{ value: JSON.stringify(req.file) }]
         });
     }
     res.status(200);
