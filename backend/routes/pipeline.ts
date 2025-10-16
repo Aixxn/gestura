@@ -12,13 +12,24 @@ const upload = multer();
     await producer.connect();
 })();
 
-router.get('/convert', upload.single('rawImage'), async (req, res) => {
+router.post('/convert/', upload.single('rawImage'), async (req, res) => {
     while (!req.body.stop) {
+        const file = req.file 
+
+        if (!file){
+            console.error('No data uploaded');
+            res.status(400);
+            return
+        }
+
         await producer.send({
             topic: 'rawImageData',
-            messages: [{ value: JSON.stringify(req.file) }]
+            messages: [{
+                key: JSON.stringify(req.body.uuid),
+                value: JSON.stringify(file?.buffer),
+            }]
         });
-    }
+    } 
     res.status(200);
 });
 
