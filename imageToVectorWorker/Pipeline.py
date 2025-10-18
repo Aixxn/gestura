@@ -3,10 +3,12 @@ import json
 from Converter import Converter
 import threading
 import redis
+import socket
 
-KAFKA_LOCAL_HOST_SERVER = 'localhost:9092'
+KAFKA_PORT = 9092
 REDIS_PORT = 6739
-REDIS_HOST = 'localhost'
+KAFKA_LOCAL_HOST_SERVER = socket.gethostname() + string(KAFKA_PORT)
+REDIS_HOST = socket.gethostname()
 NUM_PIPELINE_INSTANCE = 1
 
 
