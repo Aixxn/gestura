@@ -10,6 +10,7 @@ REDIS_PORT = 6739
 KAFKA_LOCAL_HOST_SERVER = socket.gethostname() + string(KAFKA_PORT)
 REDIS_HOST = socket.gethostname()
 NUM_PIPELINE_INSTANCE = 1
+ENCRIPTION_TYPE = 'utf-8'
 
 
 class Pipeline:
@@ -24,16 +25,17 @@ class Pipeline:
         self.consumer = KafkaConsumer(
             'rawImageData',
             bootstrap_servers=[KAFKA_LOCAL_HOST_SERVER],
-            group_id='image_to_vector',
+            group_id='image_to_vector_consumer',
             auto_offset_reset='earliest'
         )
         self.producer = KafkaProducer(
             bootstrap_servers=[KAFKA_LOCAL_HOST_SERVER],
-            value_serializer=lambda v: json.dumps(v).encode('utf-8')
+            value_serializer=lambda v: json.dumps(v).encode(ENCRIPTION_TYPE)
         )
 
     def _convert_data(self, data):
-        # but here, still don't know what kind of data type needed by the translation model
+        # bug here, still don't know what kind of data type needed by the translation model
+        # currently returning a list of float32
         result = self.converter.point_detection(data)
         keypoints = self.converter.extract_keypoints(result)
         return keypoints
@@ -46,9 +48,9 @@ class Pipeline:
                       No client ID (key) provided.')
                 continue
 
-            client_uuid = mssg.key.decode('utf-8')
+            client_uuid = mssg.key.decode(ENCRIPTION_TYPE)
 
-            if mssg.value.decode('utf-8') == 'stop':
+            if mssg.value.decode(ENCRIPTION_TYPE) == 'stop':
                 self._produce_data(client_uuid)
                 self.redis_client.delete(client_uuid)
                 continue
@@ -62,7 +64,7 @@ class Pipeline:
         payload = {'keypoints': vector_data}
         self.producer.send('keypoints',
                            value=payload,
-                           key=client_uuid.encode('utf-8'),
+                           key=client_uuid.encode(ENCRIPTION_TYPE),
                            )
         self.producer.flush()
 
