@@ -1,21 +1,20 @@
 import express from "express";
 import { Kafka } from 'kafkajs';
 import multer from 'multer';
-import { WebSocketServer } from 'ws'
-import redis from 'redis'
+import { WebSocketServer, WebSocket } from 'ws'
+
+const WEB_SOCKET_HOST = 'localhost';
+const WEB_SOCKET_PORT = 9898;
+const KAFKA_BROKER = 'localhost:9092'
 
 const router = express.Router();
-const kafka = new Kafka({ clientId: 'rawImageProducer', brokers: ['localhost:9092'] });
+const kafka = new Kafka({ clientId: 'rawImageProducer', brokers: [ KAFKA_BROKER ] });
 const producer = kafka.producer();
 const consumer = kafka.consumer({ groupId: 'translatedSignConsumer' });
-const wss = new WebSocketServer({ port: 9898 });
-const redisClient = redis.createClient({ url: 'redis://localhost:6379' });
+const wss = new WebSocketServer({ host: WEB_SOCKET_HOST, port: WEB_SOCKET_PORT });
+const sessionMap = new Map();
 
 const upload = multer();
-
-// redis
-redisClient.on('connect', () => console.log('Connected to redis'));
-redisClient.on('error', (e) => console.error('Redis client error:', e));
 
 // kafka
 (async () => {
@@ -28,32 +27,66 @@ redisClient.on('error', (e) => console.error('Redis client error:', e));
 })();
 
 (async () => {
-    try{
+    try {
         await consumer.connect();
-        await consumer.subscribe({ topic: 'translatedSign', fromBeginning: true })
+        await consumer.subscribe({ topic: 'translatedSign', fromBeginning: true });
         console.log('Kafka consumer connected successfully.');
-    } catch(e){
+
+        await consumer.run({
+            eachMessage: async ({ message }) => {
+                const resultKey = message.key ? message.key.toString() : null;
+                const resultValue = message.value ? message.value.toString() : null;
+
+                if (!resultKey) {
+                    console.error('Message received does not have a Key.');
+                    return;
+                }
+                if (!resultValue) {
+                    console.error('Message received does not have a value.');
+                    return;
+                }
+
+                const targetWs: WebSocket = sessionMap.get(resultKey);
+
+                if (targetWs && targetWs.readyState != targetWs.OPEN) {
+                    targetWs.send(resultValue);
+                    console.log(`Pushed result for ${resultKey} to WebSocket`);
+                } else{
+                    console.warn(`No active socket found for result: ${resultKey}`);
+                }
+            }
+        });
+    } catch (e) {
         console.error('Failed to connect Kafka consumer.');
     }
 });
 
-// TODO: continue here
-wss.on('connection', async (ws) => {
-    ws.on('message', (data) => {
-        console.log('Message received:', data);
+// websocket server
+wss.on('connection', async (ws, req) => {
+
+    const urlParams = new URLSearchParams(req.url?.split('?')[1]);
+    const clientUuid = urlParams.get('uuid');
+
+    if (!clientUuid) {
+        ws.close(1008, 'UUID is required for this connection.');
+        return;
+    }
+
+    ws.on('close', async () => {
+        sessionMap.delete(clientUuid);
+        console.log(`Cliet ${clientUuid} has disconnected.`);
     });
-    await consumer.run({
-        eachMessage: async ({ message }) => {
-            ws.send(String(message));  //still not sure of the data that will be received
-        },
-    })
+
+    sessionMap.set(clientUuid, ws);
+    console.log(`Client ${clientUuid} has connected.`);
 });
 
+// endpoints
 router.post('/stop', async (req, res) => {
     const uuid = req.body.uuid;
 
-    if (!uuid){
-        console.error('No uuid sent.');
+    if (!uuid) {
+        console.error('No uuid sent.')
         res.status(400).send({ message: 'No uuid has been sent to the server.' })
         return
     }
@@ -103,3 +136,4 @@ router.post('/convert', upload.single('rawImage'), async (req, res) => {
     }
 });
 
+export default router;

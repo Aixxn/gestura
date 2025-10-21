@@ -2,6 +2,7 @@ import createError from 'http-errors';
 import express, {Request, Response, NextFunction} from 'express';
 import cookieParser from 'cookie-parser';
 import logger from 'morgan';
+import router from 'routes/api';
 
 const app = express();
 
@@ -11,7 +12,7 @@ app.use(express.urlencoded({ extended: false }));
 app.use(cookieParser());
 
 // enpoints/routes
-
+app.use('/api', router);
 
 // catch 404 and forward to error handler
 app.use((_req: Request, _res: Response, next: NextFunction) => {
