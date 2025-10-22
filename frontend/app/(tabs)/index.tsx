@@ -64,15 +64,6 @@ const Gestura = () => {
       <View style={styles.overlay}>
         <View style={styles.container}>
 
-          <View style={styles.topBar}>
-            <View style={styles.logoContainer}>
-              <Text style={styles.logoIcon}></Text>
-            </View>
-            <TouchableOpacity style={styles.closeButton}>
-              <Text style={styles.closeIcon}>×</Text>
-            </TouchableOpacity>
-          </View>
-
           <View style={styles.content}>
             {/* --- Welcome Text with Gradient Background --- */}
             <View style={styles.titleContainer}>
