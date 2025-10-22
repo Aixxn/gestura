@@ -8,11 +8,21 @@ export const COLORS = {
   textPrimary: '#ffffffff', 
   textSecondary: '#929bf4ff',
   buttonGrey: '#c3c2c2d9',
-  buttonBorder: '#c3c2c2d9',
   white: '#FFFFFF',
   lightBlueCircle: 'rgba(0, 122, 255, 0.15)', 
   dotInactive: '#D1D5DB',
   tapButtonGrey: '#F5F5F5',
+  black: '#000',
+  darkGrey: '#333',
+};
+
+// Base shadow style for reuse
+const baseShadow = {
+  shadowColor: '#000',
+  shadowOffset: { width: 0, height: 2 },
+  shadowOpacity: 0.1,
+  shadowRadius: 3,
+  elevation: 2,
 };
 
 export const styles = StyleSheet.create({
@@ -28,7 +38,6 @@ export const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: 'rgba(42, 82, 192, 0.14)',
   },
-  
   content: {
     alignItems: 'center',
     paddingHorizontal: 30,
@@ -38,7 +47,6 @@ export const styles = StyleSheet.create({
     marginTop: 130,
     marginBottom: 0,
   },
-  
   title: {
     fontSize: 28,
     fontWeight: 'bold',
@@ -56,7 +64,7 @@ export const styles = StyleSheet.create({
   },
   dotsContainer: {
     flexDirection: 'row',
-    marginTop: 40,
+    marginTop: 70,
   },
   dot: {
     marginTop: 140,
@@ -80,11 +88,7 @@ export const styles = StyleSheet.create({
     paddingHorizontal: 18,
     borderRadius: 30,
     alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: {
-      width: 0,
-      height: 2,
-    },
+    ...baseShadow,
     shadowOpacity: 0.1,
     shadowRadius: 4,
     elevation: 3,
@@ -108,15 +112,15 @@ export const styles = StyleSheet.create({
 export const cameraStyles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#000',
+    backgroundColor: COLORS.black,
   },
   loadingContainer: {
     flex: 1,
-    backgroundColor: '#000',
+    backgroundColor: COLORS.black,
   },
   permissionContainer: {
     flex: 1,
-    backgroundColor: '#000',
+    backgroundColor: COLORS.black,
     justifyContent: 'center',
     alignItems: 'center',
     paddingHorizontal: 30,
@@ -124,7 +128,7 @@ export const cameraStyles = StyleSheet.create({
   permissionMessage: {
     textAlign: 'center',
     paddingBottom: 30,
-    color: 'white',
+    color: COLORS.white,
     fontSize: 18,
     lineHeight: 26,
   },
@@ -135,7 +139,7 @@ export const cameraStyles = StyleSheet.create({
     borderRadius: 25,
   },
   permissionButtonText: {
-    color: 'white',
+    color: COLORS.white,
     fontSize: 16,
     fontWeight: 'bold',
   },
@@ -170,10 +174,9 @@ export const cameraStyles = StyleSheet.create({
     justifyContent: 'center',
     paddingVertical: 10,
     paddingHorizontal: 20,
-    backgroundColor: 'transparent',
   },
   statusText: {
-    color: 'white',
+    color: COLORS.white,
     fontSize: 16,
     fontWeight: '600',
     flex: 1,
@@ -187,22 +190,18 @@ export const cameraStyles = StyleSheet.create({
   cameraFlipIcon: {
     width: 24,
     height: 24,
-    tintColor: 'white',
+    tintColor: COLORS.white,
   },
   translationContainer: {
     position: 'absolute',
-    bottom: 35,
+    bottom: 48,
     left: 0,
     right: 0,
     height: 250,
     opacity: 0.65,
-    backgroundColor: 'rgba(255, 255, 255, 1)',
+    backgroundColor: COLORS.white,
     padding: 25,
-    shadowColor: '#000',
-    shadowOffset: {
-      width: 0,
-      height: 2,
-    },
+    ...baseShadow,
     shadowOpacity: 0.2,
     shadowRadius: 4,
     elevation: 5,
@@ -213,12 +212,12 @@ export const cameraStyles = StyleSheet.create({
   translationText: {
     fontSize: 16,
     lineHeight: 22,
-    color: '#333',
+    color: COLORS.darkGrey,
     textAlign: 'left',
   },
   placeholderText: {
     fontSize: 14,
-    color: '#999',
+    color: COLORS.white,
     textAlign: 'left',
     fontStyle: 'italic',
   },
@@ -232,28 +231,23 @@ export const cameraStyles = StyleSheet.create({
     backgroundColor: '#f0f0f0',
     justifyContent: 'center',
     alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: {
-      width: 0,
-      height: 1,
-    },
+    ...baseShadow,
     shadowOpacity: 0.1,
     shadowRadius: 2,
-    elevation: 2,
   },
   audioButtonActive: {
     backgroundColor: COLORS.accentBlue,
   },
   bottomActionsContainer: {
     position: 'absolute',
-    bottom: 40,
+    bottom: 20,
     left: 0,
     right: 0,
     flexDirection: 'row',
     justifyContent: 'center',
     alignItems: 'center',
     paddingHorizontal: 60,
-    gap: 20, // Adds consistent spacing between buttons
+    gap: 20,
   },
   actionButton: {
     backgroundColor: COLORS.tapButtonGrey,
@@ -262,19 +256,12 @@ export const cameraStyles = StyleSheet.create({
     borderRadius: 27.5,
     justifyContent: 'center',
     alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: {
-      width: 0,
-      height: 2,
-    },
-    shadowOpacity: 0.1,
-    shadowRadius: 3,
-    elevation: 2,
+    ...baseShadow,
   },
   actionButtonImage: {
     width: 24,
     height: 24,
-    tintColor: '#333333',
+    tintColor: COLORS.darkGrey,
   },
   tapToStartButton: {
     flexDirection: 'row',
@@ -284,25 +271,18 @@ export const cameraStyles = StyleSheet.create({
     borderRadius: 30,
     paddingVertical: 15,
     paddingHorizontal: 25,
-    minWidth: 140, // Slightly reduced width for better balance
-    shadowColor: '#000',
-    shadowOffset: {
-      width: 0,
-      height: 2,
-    },
-    shadowOpacity: 0.1,
-    shadowRadius: 3,
-    elevation: 2,
+    minWidth: 140,
+    ...baseShadow,
   },
   tapToStartIcon: {
     width: 20,
     height: 20,
     marginRight: 8,
-    tintColor: '#333333',
+    tintColor: COLORS.darkGrey,
   },
   tapToStartText: {
     fontSize: 16,
-    color: '#333333',
+    color: COLORS.darkGrey,
     fontWeight: '600',
   },
 });

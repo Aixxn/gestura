@@ -1,7 +1,8 @@
 import { useRouter } from 'expo-router';
 import React, { useState } from 'react';
 import { ImageBackground, Text, TouchableOpacity, View } from 'react-native';
-import { styles } from './styles';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { styles } from '../../constants/styles';
 
 const Gestura = () => {
   const router = useRouter();
@@ -56,11 +57,12 @@ const Gestura = () => {
   const screenData = getScreenData();
 
   return (
-    <ImageBackground 
-      source={screenData.backgroundImage}
-      style={styles.backgroundImage}
-      resizeMode="cover"
-    >
+    <SafeAreaView style={{ flex: 1 }}>
+      <ImageBackground 
+        source={screenData.backgroundImage}
+        style={styles.backgroundImage}
+        resizeMode="cover"
+      >
       <View style={styles.overlay}>
         <View style={styles.container}>
 
@@ -92,6 +94,7 @@ const Gestura = () => {
         </View>
       </View>
     </ImageBackground>
+    </SafeAreaView>
   );
 };
 export default Gestura;

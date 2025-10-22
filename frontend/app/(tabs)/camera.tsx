@@ -1,7 +1,8 @@
-import { Camera, useCameraDevice, useCameraPermission } from 'react-native-vision-camera';
+import { Camera, useCameraDevice, useCameraPermission, useFrameProcessor } from 'react-native-vision-camera';
 import { useState, useRef, useCallback } from 'react';
 import { Image, ImageBackground, Text, TouchableOpacity, View } from 'react-native';
-import { cameraStyles } from './styles';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { cameraStyles } from '../../constants/styles';
 
 export default function CameraComponent() {
   const { hasPermission, requestPermission } = useCameraPermission();
@@ -9,19 +10,49 @@ export default function CameraComponent() {
   const [translationText, setTranslationText] = useState('');
   const [isPlaying, setIsPlaying] = useState(false);
   const [isFrontCamera, setIsFrontCamera] = useState(true);
+  const [cameraError, setCameraError] = useState<string | null>(null);
   
   const device = useCameraDevice(isFrontCamera ? 'front' : 'back');
   const camera = useRef<Camera>(null);
 
-  // Frame processor callback
-  const frameProcessor = useCallback((frame) => {
-    'worklet';
+  // Camera error handler
+  const onError = useCallback((error: any) => {
+    console.error('Camera error:', error);
+    setCameraError(error.message || 'Camera error occurred');
+  }, []);
+
+  // Process frame on JS thread (for API calls, state updates, etc.)
+  const processFrameOnJS = useCallback(async (width: number, height: number, timestamp: number) => {
     try {
-      // TODO: Add sign language detection processing here
-      console.log(`Frame: ${frame.width}x${frame.height} (${frame.pixelFormat})`);
+      // TODO: Send frame to your backend for sign language detection
+      console.log(`Processing frame: ${width}x${height} @ ${timestamp}ms`);
+      
+      // Example API call to your backend
+      // const response = await fetch('http://your-backend-url/detect', {
+      //   method: 'POST',
+      //   headers: { 'Content-Type': 'application/json' },
+      //   body: JSON.stringify({ width, height, timestamp }),
+      // });
+      // const result = await response.json();
+      // setTranslationText(result.detectedSign);
+      
     } catch (error) {
       console.error('Frame processing error:', error);
     }
+  }, []);
+
+  // Frame processor - runs on native thread for performance
+  const frameProcessor = useFrameProcessor((frame) => {
+    'worklet';
+    
+    // Access frame properties (don't use console.log in worklets - it causes crashes)
+    // const width = frame.width;
+    // const height = frame.height;
+    // const timestamp = frame.timestamp;
+    
+    // TODO: Process frame for sign language detection
+    // You can use ML models here or send to backend
+    
   }, []);
 
   const toggleCameraFacing = useCallback(() => {
@@ -40,12 +71,27 @@ export default function CameraComponent() {
   }
 
   if (!device) {
-    return <View style={cameraStyles.loadingContainer} />;
+    return (
+      <View style={cameraStyles.loadingContainer}>
+        <Text style={cameraStyles.permissionMessage}>Loading camera...</Text>
+      </View>
+    );
+  }
+
+  if (cameraError) {
+    return (
+      <View style={cameraStyles.permissionContainer}>
+        <Text style={cameraStyles.permissionMessage}>Camera Error: {cameraError}</Text>
+        <TouchableOpacity style={cameraStyles.permissionButton} onPress={() => setCameraError(null)}>
+          <Text style={cameraStyles.permissionButtonText}>Retry</Text>
+        </TouchableOpacity>
+      </View>
+    );
   }
 
   const handleTapToStart = () => {
     setIsActive(!isActive);
-    // Toggle frame processing
+    console.log('Camera active:', !isActive);
   };
 
   const handlePlayAudio = () => {
@@ -60,12 +106,13 @@ export default function CameraComponent() {
   };
 
   return (
-    <View style={cameraStyles.container}>
-      <ImageBackground 
-        source={require('../../images/Camera-bg.png')} 
-        style={cameraStyles.backgroundImage}
-        resizeMode="cover"
-      >
+    <SafeAreaView style={{ flex: 1 }}>
+      <View style={cameraStyles.container}>
+        <ImageBackground 
+          source={require('../../images/Camera-bg.png')} 
+          style={cameraStyles.backgroundImage}
+          resizeMode="cover"
+        >
         {/* Camera Container with border alignment */}
         <View style={cameraStyles.cameraContainer}>
           <View style={cameraStyles.cameraFrame}>
@@ -73,16 +120,11 @@ export default function CameraComponent() {
               ref={camera}
               style={cameraStyles.camera}
               device={device}
-              isActive={isActive}
-              frameProcessor={frameProcessor}
-              frameProcessorFps={5}
-              format={{ // Add format configuration
-                photoCodec: 'jpeg',
-                videoCodec: 'h264',
-              }}
-              photo={true} // Enable photo capture
-              video={false} // Disable video recording
-              audio={false} // Disable audio recording
+              isActive={true}
+              onError={onError}
+              photo={true}
+              video={false}
+              audio={false}
             />
           </View>
         </View>
@@ -145,11 +187,14 @@ export default function CameraComponent() {
               style={cameraStyles.tapToStartIcon}
               resizeMode="contain"
             />
-            <Text style={cameraStyles.tapToStartText}>Tap to Start</Text>
+            <Text style={cameraStyles.tapToStartText}>
+              {isActive ? 'Tap to Stop' : 'Tap to Start'}
+            </Text>
           </TouchableOpacity>
         </View>
 
-      </ImageBackground>
-    </View>
+        </ImageBackground>
+      </View>
+    </SafeAreaView>
   );
 }
