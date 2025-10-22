@@ -7,7 +7,8 @@
   "scripts": {
     "start": "node dist/bin/www.js",
     "build": "rm -rf dist && tsc && tsc-alias",
-    "dev": "nodemon --exec ts-node -r tsconfig-paths/register ./bin/www.ts"
+    "dev": "nodemon --exec ts-node -r tsconfig-paths/register ./bin/www.ts",
+    "test": "mocha --timeout 5000"
   },
   "author": "baronocasiones",
   "dependencies": {
@@ -23,16 +24,25 @@
     "ws": "^8.18.3"
   },
   "devDependencies": {
+    "@types/chai": "^5.2.3",
     "@types/cookie-parser": "^1.4.9",
     "@types/debug": "^4.1.12",
     "@types/express": "^5.0.3",
     "@types/http-errors": "^2.0.5",
+    "@types/mocha": "^10.0.10",
     "@types/morgan": "^1.9.10",
     "@types/multer": "^2.0.0",
     "@types/node": "^24.7.1",
     "@types/redis": "^4.0.10",
+    "@types/sinon": "^17.0.4",
     "@types/ws": "^8.18.1",
+    "chai": "^6.2.0",
+    "chai-http": "^5.1.2",
+    "mocha": "^11.7.4",
     "nodemon": "^3.1.10",
+    "sinon": "^21.0.0",
+    "sinon-chai": "^4.0.1",
+    "supertest": "^7.1.4",
     "ts-node": "^10.9.2",
     "tsc-alias": "^1.8.16",
     "tsconfig-paths": "^4.2.0",

@@ -1,13 +1,13 @@
 from kafka import KafkaProducer, KafkaConsumer
-import json
 from Converter import Converter
 import threading
 import redis
 import socket
+import json
 
 KAFKA_PORT = 9092
 REDIS_PORT = 6739
-KAFKA_LOCAL_HOST_SERVER = socket.gethostname() + string(KAFKA_PORT)
+KAFKA_LOCAL_HOST_SERVER = socket.gethostname() + str(KAFKA_PORT)
 REDIS_HOST = socket.gethostname()
 NUM_PIPELINE_INSTANCE = 1
 ENCRIPTION_TYPE = 'utf-8'
