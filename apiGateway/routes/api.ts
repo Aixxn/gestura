@@ -1,98 +1,139 @@
-import chai from 'chai';
-import chaiHttp from 'chai-http';
-import sinon from 'sinon';
-import express from 'express';
+import express from "express";
+import { Kafka } from 'kafkajs';
+import multer from 'multer';
+import { WebSocketServer, WebSocket } from 'ws'
 
-// import the compiled router (not the TS source)
-import router from '../dist/routes/api.js';
+const WEB_SOCKET_HOST = 'localhost';
+const WEB_SOCKET_PORT = 9898;
+const KAFKA_BROKER = process.env.KAFKA_BROKER || 'kafka:9092';
 
-const { expect } = chai;
-chai.use(chaiHttp);
+const router = express.Router();
+const kafka = new Kafka({ clientId: 'rawImageProducer', brokers: [ KAFKA_BROKER ] });
+const producer = kafka.producer();
+const consumer = kafka.consumer({ groupId: 'translatedSignConsumer' });
+const wss = new WebSocketServer({ host: WEB_SOCKET_HOST, port: WEB_SOCKET_PORT });
+const sessionMap = new Map();
 
-describe('Express Kafka Router', function() {
-  let app;
-  let sendStub;
+const upload = multer();
 
-  beforeEach(function() {
-    app = express();
-    app.use(express.json());
-    app.use('/', router);
+// kafka
+(async () => {
+    try {
+        await producer.connect();
+        console.log('Kafka producer connected successfully.')
+    } catch (e) {
+        console.error('Failed to connect Kafka producer:', e);
+    }
+})();
 
-    // stub Kafka producer.send globally
-    const kafkaModule = await import('../dist/routes/api.js');
-    sendStub = sinon.stub(kafkaModule.producer, 'send').resolves();
-  });
+(async () => {
+    try {
+        await consumer.connect();
+        await consumer.subscribe({ topic: 'translatedSign', fromBeginning: true });
+        console.log('Kafka consumer connected successfully.');
 
-  afterEach(function() {
-    sinon.restore();
-  });
+        await consumer.run({
+            eachMessage: async ({ message }) => {
+                const resultKey = message.key ? message.key.toString() : null;
+                const resultValue = message.value ? message.value.toString() : null;
 
-  describe('POST /stop', function() {
-    it('should return 400 if no uuid is sent', async function() {
-      const res = await chai.request(app).post('/stop').send({});
-      expect(res).to.have.status(400);
-      expect(res.body.message).to.equal('No uuid has been sent to the server.');
-    });
+                if (!resultKey) {
+                    console.error('Message received does not have a Key.');
+                    return;
+                }
+                if (!resultValue) {
+                    console.error('Message received does not have a value.');
+                    return;
+                }
 
-    it('should send to Kafka and return 200 when uuid is provided', async function() {
-      sendStub.resolves();
+                const targetWs: WebSocket = sessionMap.get(resultKey);
 
-      const res = await chai.request(app).post('/stop').send({ uuid: '1234' });
-      expect(sendStub.calledOnce).to.be.true;
-      expect(res).to.have.status(200);
-      expect(res.text).to.equal('Successfully finished sequence.');
-    });
-
-    it('should return 500 if Kafka send fails', async function() {
-      sendStub.rejects(new Error('Kafka failure'));
-
-      const res = await chai.request(app).post('/stop').send({ uuid: '1234' });
-      expect(res).to.have.status(500);
-      expect(res.body.message).to.equal('Failed to stop processing.');
-    });
-  });
-
-  describe('POST /convert', function() {
-    it('should return 400 if no file is uploaded', async function() {
-      const res = await chai.request(app).post('/convert').send({ uuid: '1234' });
-      expect(res).to.have.status(400);
-      expect(res.body.message).to.equal('No file has been sent to the server');
-    });
-
-    it('should return 400 if no uuid is sent', async function() {
-      const res = await chai.request(app)
-        .post('/convert')
-        .attach('rawImage', Buffer.from('fake data'), 'fake.png');
-      expect(res).to.have.status(400);
-      expect(res.body.message).to.equal('No uuid sent to the server.');
-    });
-
-    it('should send image to Kafka and return 200', async function() {
-      sendStub.resolves();
-
-      const res = await chai.request(app)
-        .post('/convert')
-        .set('Content-Type', 'multipart/form-data')
-        .attach('rawImage', Buffer.from('fake data'), 'fake.png')
-        .field('uuid', '1234');
-
-      expect(sendStub.calledOnce).to.be.true;
-      expect(res).to.have.status(200);
-      expect(res.body.message).to.equal('image received and queued.');
-    });
-
-    it('should return 500 if Kafka send fails', async function() {
-      sendStub.rejects(new Error('Kafka error'));
-
-      const res = await chai.request(app)
-        .post('/convert')
-        .set('Content-Type', 'multipart/form-data')
-        .attach('rawImage', Buffer.from('fake data'), 'fake.png')
-        .field('uuid', '1234');
-
-      expect(res).to.have.status(500);
-      expect(res.body.message).to.equal('Failed to proccess image. ');
-    });
-  });
+                if (targetWs && targetWs.readyState != targetWs.OPEN) {
+                    targetWs.send(resultValue);
+                    console.log(`Pushed result for ${resultKey} to WebSocket`);
+                } else{
+                    console.warn(`No active socket found for result: ${resultKey}`);
+                }
+            }
+        });
+    } catch (e) {
+        console.error('Failed to connect Kafka consumer.');
+    }
 });
 
+// websocket server
+wss.on('connection', async (ws, req) => {
+
+    const urlParams = new URLSearchParams(req.url?.split('?')[1]);
+    const clientUuid = urlParams.get('uuid');
+
+    if (!clientUuid) {
+        ws.close(1008, 'UUID is required for this connection.');
+        return;
+    }
+
+    ws.on('close', async () => {
+        sessionMap.delete(clientUuid);
+        console.log(`Cliet ${clientUuid} has disconnected.`);
+    });
+
+    sessionMap.set(clientUuid, ws);
+    console.log(`Client ${clientUuid} has connected.`);
+});
+
+// endpoints
+router.post('/stop', async (req, res) => {
+    const uuid = req.body.uuid;
+
+    if (!uuid) {
+        console.error('No uuid sent.')
+        res.status(400).send({ message: 'No uuid has been sent to the server.' })
+        return
+    }
+
+    try {
+        await producer.send({
+            topic: 'rawImageData',
+            messages: [{
+                key: String(uuid),
+                value: 'stop'
+            }]
+        })
+        res.status(200).send('Successfully finished sequence.');
+    } catch (e) {
+        console.error('Error:', e);
+        res.status(500).send({ message: 'Failed to stop processing.' });
+    }
+});
+
+router.post('/convert', upload.single('rawImage'), async (req, res) => {
+    const file = req.file
+    const uuid = req.body.uuid
+
+    if (!file) {
+        console.error('No data uploaded');
+        res.status(400).send({ message: 'No file has been sent to the server' });
+        return
+    }
+    if (!uuid) {
+        console.error('No uuid sent');
+        res.status(400).send({ message: 'No uuid sent to the server.' });
+        return;
+    }
+
+    try {
+        await producer.send({
+            topic: 'rawImageData',
+            messages: [{
+                key: String(uuid),
+                value: file.buffer,
+            }]
+        });
+        res.status(200).send({ message: 'image received and queued.' });
+    } catch (e) {
+        console.error('Error failed to send data to kafka broker:', e)
+        res.status(500).send({ message: 'Failed to proccess image. ' })
+    }
+});
+
+export default router;
