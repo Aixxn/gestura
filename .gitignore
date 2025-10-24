@@ -6,4 +6,12 @@
 # vscode
 .vscode/
 
+# python 
 **/.venv/
+**/.pytest_cache/
+**/__pycache__/
+
+
+# docker
+**/Dockerfile
+**/.dockerignore
