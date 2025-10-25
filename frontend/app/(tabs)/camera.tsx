@@ -1,17 +1,15 @@
 import { Camera, useCameraDevice, useCameraPermission, useFrameProcessor } from 'react-native-vision-camera';
 import { useState, useRef, useCallback, useEffect } from 'react';
-import { Image, ImageBackground, Text, TouchableOpacity, View, FlatList } from 'react-native';
+import { Image, ImageBackground, Text, TouchableOpacity, View} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { cameraStyles } from '../../constants/styles';
 import * as Speech from 'expo-speech';
-
 interface CapturedFrame {
   id: string;
   width: number;
   height: number;
   timestamp: number;
 }
-
 export default function CameraComponent() {
   const { hasPermission, requestPermission } = useCameraPermission();
   const [isActive, setIsActive] = useState(false);
@@ -48,7 +46,7 @@ export default function CameraComponent() {
           };
           
           setCapturedFrames(prev => [...prev.slice(-9), newFrame]);
-          console.log(`✅ Frame captured: ${newFrame.width}x${newFrame.height} @ ${newFrame.timestamp}ms - Total: ${frameCount.current}`);
+          console.log(`Frame captured: ${newFrame.width}x${newFrame.height} @ ${newFrame.timestamp}ms - Total: ${frameCount.current}`);
           
           // TODO: Send frame data to your sign language detection backend
         }
@@ -139,11 +137,11 @@ export default function CameraComponent() {
       // Stop speaking if already playing
       await Speech.stop();
       setIsPlaying(false);
-      console.log('🔇 Stopped speech');
+      console.log('Stopped speech');
     } else {
       // Start speaking
       setIsPlaying(true);
-      console.log('🔊 Speaking:', textToSpeak);
+      console.log('Speaking:', textToSpeak);
       
       Speech.speak(textToSpeak, {
         language: 'en-US',
@@ -151,11 +149,11 @@ export default function CameraComponent() {
         rate: 0.9,
         onDone: () => {
           setIsPlaying(false);
-          console.log('✅ Finished speaking');
+          console.log('Finished speaking');
         },
         onError: (error) => {
           setIsPlaying(false);
-          console.error('❌ Speech error:', error);
+          console.error('Speech error:', error);
         },
       });
     }
@@ -184,9 +182,7 @@ export default function CameraComponent() {
         audio={false}
         frameProcessor={frameProcessor}
         onError={onError}
-/>
-
-          
+        />
           </View>
         </View>
         
@@ -208,14 +204,14 @@ export default function CameraComponent() {
             top: 80, 
             left: 10, 
             right: 10,
-            backgroundColor: 'rgba(0,0,0,0.8)',
+            backgroundColor: 'rgba(217, 216, 216, 0.72)',
             padding: 10,
             borderRadius: 10,
             borderWidth: 2,
-            borderColor: '#00ff00'
+            borderColor: '#48e6f7ff'
           }}>
             <Text style={{ 
-              color: '#00ff00', 
+              color: '#f3f3f3ec', 
               fontSize: 16, 
               fontWeight: 'bold',
               marginBottom: 5 
@@ -234,53 +230,6 @@ export default function CameraComponent() {
             )}
           </View>
         )}
-        
-        {/* Frame List Display */}
-        {capturedFrames.length > 0 && (
-          <View style={{ position: 'absolute', bottom: 180, left: 10, right: 10, height: 110 }}>
-            <Text style={{ 
-              color: 'white', 
-              marginBottom: 5, 
-              fontSize: 14,
-              fontWeight: 'bold',
-              backgroundColor: 'rgba(0,0,0,0.7)',
-              padding: 5,
-              borderRadius: 5
-            }}>
-              Captured Frames ({capturedFrames.length}/10)
-            </Text>
-            <FlatList
-              horizontal
-              data={capturedFrames}
-              keyExtractor={(item) => item.id}
-              showsHorizontalScrollIndicator={false}
-              renderItem={({ item, index }) => (
-                <View style={{ 
-                  width: 85, 
-                  height: 70, 
-                  marginHorizontal: 3, 
-                  backgroundColor: 'rgba(34,139,34,0.9)', 
-                  borderRadius: 8,
-                  justifyContent: 'center',
-                  alignItems: 'center',
-                  borderWidth: 2,
-                  borderColor: '#00ff00'
-                }}>
-                  <Text style={{ color: 'white', fontSize: 12, fontWeight: 'bold' }}>
-                    Frame {index + 1}
-                  </Text>
-                  <Text style={{ color: 'white', fontSize: 9 }}>
-                    {item.width}x{item.height}
-                  </Text>
-                  <Text style={{ color: 'white', fontSize: 8 }}>
-                    {item.timestamp}ms
-                  </Text>
-                </View>
-              )}
-            />
-          </View>
-        )}
-
         <View style={cameraStyles.translationContainer}>
           <View style={cameraStyles.translationContent}>
             {translationText ? (
@@ -328,7 +277,6 @@ export default function CameraComponent() {
             </Text>
           </TouchableOpacity>
         </View>
-
         </ImageBackground>
       </View>
     </SafeAreaView>

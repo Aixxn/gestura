@@ -166,7 +166,7 @@ export const cameraStyles = StyleSheet.create({
   },
   topOverlay: {
     position: 'absolute',
-    top: 60,
+    top: 30,
     left: 0,
     right: 0,
     flexDirection: 'row',
@@ -194,7 +194,7 @@ export const cameraStyles = StyleSheet.create({
   },
   translationContainer: {
     position: 'absolute',
-    bottom: 48,
+    bottom: 18,
     left: 0,
     right: 0,
     height: 250,
