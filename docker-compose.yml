@@ -3,6 +3,7 @@ services:
     image: baronocasiones/gestura-apigateway:dev
     ports: 
       - "8080:8080"
+      - "9898:9898"
     restart: always
     depends_on:
       - kafka
