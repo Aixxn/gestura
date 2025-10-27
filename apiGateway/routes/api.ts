@@ -74,7 +74,7 @@ wss.on('connection', async (ws, req) => {
 
     ws.on('close', async () => {
         sessionMap.delete(clientUuid);
-        console.log(`Cliet ${clientUuid} has disconnected.`);
+        console.log(`Client ${clientUuid} has disconnected.`);
     });
 
     sessionMap.set(clientUuid, ws);

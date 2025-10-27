@@ -37,35 +37,44 @@ class Pipeline:
         # currently returning a list of float32
         result = self.converter.point_detection(data)
         keypoints = self.converter.extract_keypoints(result)
+        keypoints = self.converter.process_new_frame(keypoints)
         return keypoints
 
     def start_consuming(self):
         print(f'Pipeline {self.instance_id}: Listening for data...')
         for mssg in self.consumer:
+            mssg_value = mssg.value
             if mssg.key is None:
                 print(f'[{self.instance_id}] Skipping message: \
                       No client ID (key) provided.')
                 continue
 
+            if mssg_value is None:
+                print('There is no message to receive, skipping...')
+                continue
+
+            decoded_value = None
+            if isinstance(mssg_value, bytes):
+                try:
+                    decoded_value = mssg_value.decode(ENCRIPTION_TYPE)
+                except UnicodeDecodeError:
+                    decoded_value = None
+
             client_uuid = mssg.key.decode(ENCRIPTION_TYPE)
 
-            if mssg.value.decode(ENCRIPTION_TYPE) == 'stop':
-                self._produce_data(client_uuid)
+            if decoded_value == 'stop':
+                self._convert_vector_to_words(client_uuid)
                 self.redis_client.delete(client_uuid)
                 continue
 
             keypoints = self._convert_data(mssg.value)
+            word_prediction = self.translator_model_pred(client_uuid)
+            prediction_label, prediction_conf = self.converter.post_process_keypoints(word_prediction)
             self.redis_client.rpush(client_uuid, json.dumps(keypoints))
 
-    def _produce_data(self, client_uuid):
-        vector_data_json_string = self.redis_client.lrange(client_uuid, 0, -1)
-        vector_data = [json.loads(item) for item in vector_data_json_string]
-        payload = {'keypoints': vector_data}
-        self.producer.send('keypoints',
-                           value=payload,
-                           key=client_uuid.encode(ENCRIPTION_TYPE),
-                           )
-        self.producer.flush()
+    def _translator_model_pred(self, client_uuid):
+        # send post request to the ai model server
+        pass
 
 
 if __name__ == '__main__':

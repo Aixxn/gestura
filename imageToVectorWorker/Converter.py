@@ -1,11 +1,71 @@
 import mediapipe as mp
 import cv2 as cv
 import numpy as np
+from collections import deque
+import time
+
+# PARAMETERS (tune these)
+WINDOW_SIZE = 80
+STRIDE = 8
+FEATURE_DIM = 1662
+CONF_THRESH = 0.80
+STABILITY_COUNT = 3
+SMOOTHING_WINDOW = 5         # used if smoothing_type == 'mean'
+EMA_ALPHA = 0.4              # used if smoothing_type == 'ema'
+COOLDOWN_STEPS = 3           # number of predictions to skip after detection (not frames)
+smoothing_type = 'mean'       # 'ema' or 'mean'
 
 
 class Converter:
+    # state
+    self.frame_buffer = deque(maxlen=WINDOW_SIZE)   # stores per-frame keypoints (1662,)
+    self.pred_history = deque(maxlen=SMOOTHING_WINDOW)  # stores recent softmax vectors
+    self.stable_counter = 0
+    self.last_emitted_label = None
+    self.cooldown_counter = 0
+    self.ema_state = None  # for EMA smoothing (np.array of shape (num_classes,))
+
     def __init__(self):
         self.mp_model = mp.solutions.holistic.Holistic()
+
+    def post_process_keypoints(self, pred)
+        # store raw probs history for mean smoothing if needed
+        self.pred_history.append(pred)
+
+        # compute smoothed probs
+        smoothed = self.update_smoothing(pred)
+
+        # decide predicted label and confidence
+        predicted_label = int(np.argmax(smoothed))
+        predicted_conf = float(smoothed[predicted_label])
+
+        # cooldown handling
+        if self.cooldown_counter > 0:
+            cooldown_counter -= 1
+            return None
+
+        # stability check
+        if predicted_conf >= CONF_THRESH:
+            # check if last_emitted_label is same as predicted_label
+            if self.last_emitted_label == predicted_label:
+                # if we already emitted same label earlier, avoid re-emitting until cooldown
+                # or you can increase stable_counter to require sustained detection
+                # reset stable_counter to STABILITY_COUNT to avoid immediate re-fire
+                self.stable_counter = STABILITY_COUNT
+            else:
+                # we are seeing a candidate label
+                self.stable_counter += 1
+                if self.stable_counter >= STABILITY_COUNT:
+                    # confirmed detection
+                    last_emitted_label = predicted_label
+                    cooldown_counter = COOLDOWN_STEPS
+                    self.stable_counter = 0
+                    # return the label (or process further e.g. append to sentence)
+                    return predicted_label, predicted_conf
+        else:
+            self.stable_counter = 0
+
+        return None
 
     def point_detection(self, image_byte):
         '''
@@ -22,9 +82,11 @@ class Converter:
         image = cv.cvtColor(cv_image, cv.COLOR_BGR2RGB)
         image.flags.writeable = False
         results = self.mp_model.process(image)
+        preprocessed_result = self._preprocess_landmark_sequence(results)
+        self.frame_buffer.append(preprocessed_result)
         image.flags.writeable = True
         self.image = cv.cvtColor(image, cv.COLOR_RGB2BGR)
-        return results
+        return preprocessed_result
 
     def extract_keypoints(self, results):
         '''
@@ -62,3 +124,41 @@ class Converter:
         lm_list = np.array(lm_list, dtype=np.float32).tolist()
 
         return lm_list
+
+    def update_smoothing(self, new_probs):
+        if smoothing_type == 'ema':
+            if self.ema_state is None:
+                self.ema_state = new_probs.copy()
+            else:
+                self.ema_state = EMA_ALPHA * new_probs + (1 - EMA_ALPHA) * self.ema_state
+            return self.ema_state
+        else:
+            # mean smoothing using pred_history
+            arr = np.stack(list(self.pred_history) + [new_probs]) if len(self.pred_history) > 0 else new_probs
+            return arr.mean(axis=0)
+
+    def process_new_frame(self, frame):
+        """
+        Called for each incoming raw frame (OpenCV BGR).
+        Steps:
+          - run mediapipe detection to get results
+          - extract keypoints vector (1662,)
+          - append to frame_buffer
+          - every STRIDE frames, if we have WINDOW_SIZE frames, run inference + smoothing + detection
+        """
+        # if not enough frames yet, just wait
+        if len(self.frame_buffer) < WINDOW_SIZE:
+            return None
+
+        # evaluate only every STRIDE frames (to reduce compute)
+        # we use a simple frame counter approach; you can use timestamps instead
+        process_new_frame.counter = getattr(process_new_frame, 'counter', 0) + 1
+        if process_new_frame.counter % STRIDE != 0:
+            return None
+
+        # prepare window (stack into (W, D))
+        window = np.stack(self.frame_buffer)  # newest 80 frames
+
+        # optional: you might center crop or randomly jitter in production for robustness
+        return window
+
