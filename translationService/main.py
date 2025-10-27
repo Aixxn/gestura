@@ -25,7 +25,6 @@ class ConvertSentenceResponse(BaseModel):
 
 
 # ASL Grammar Fixer Class
-@app.post('/translate')
 class ASLGrammarFixer:
     def __init__(self, api_key: str = None):
         self.client = Groq(api_key=api_key or os.getenv("GROQ_API_KEY"))
@@ -120,6 +119,8 @@ grammar_fixer = ASLGrammarFixer()
 async def translate():
     """Legacy endpoint - placeholder"""
     return {"message": "Use /convert-sentence endpoint"}
+
+
 
 @app.post('/convert-sentence', response_model=ConvertSentenceResponse)
 async def convert_sentence(request: ConvertSentenceRequest):
