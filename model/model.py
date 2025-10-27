@@ -80,11 +80,6 @@ if __name__ == "__main__":
             metrics=['accuracy']
             )
 
-    history = model.fit(
-            X_train,
-            y_train,
-            )
-
     early_stopping = EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True)
     checkpoint = ModelCheckpoint('best_model.keras', save_best_only=True, monitor='val_accuracy')
 
