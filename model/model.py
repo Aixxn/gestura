@@ -5,7 +5,7 @@ import os
 import numpy as np
 from sklearn.model_selection import train_test_split
 
-def create_model(snum_classes, eq_length=80, feature_dim=1662, 
+def create_model(num_classes, seq_length=80, feature_dim=1663, 
                                   lstm_units=256, d_model=256, num_heads=4,
                                   ff_dim=512, dropout=0.3):
     inputs = layers.Input(shape=(seq_length, feature_dim))
@@ -39,12 +39,12 @@ def create_model(snum_classes, eq_length=80, feature_dim=1662,
 
 
 if __name__ == "__main__":
-    sign_classes = os.listdir('keypoint_data_augmented')
+    sign_classes = os.listdir('/mnt/hdd/Downloads/keypoint_data_selected_augmented')
     
     x, y = [], []
 
     for label, gesture in enumerate(sign_classes):
-        gesture_dir = os.path.join("keypoint_data_augmented", gesture)
+        gesture_dir = os.path.join('/mnt/hdd/Downloads/keypoint_data_selected_augmented', gesture)
         files = [os.path.join(gesture_dir, f) for f in os.listdir(gesture_dir) if f.endswith(".npy")]
         
         for f in files:
@@ -78,11 +78,6 @@ if __name__ == "__main__":
             optimizer='adam',
             loss='sparse_categorical_crossentropy',
             metrics=['accuracy']
-            )
-
-    history = model.fit(
-            X_train,
-            y_train,
             )
 
     early_stopping = EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True)

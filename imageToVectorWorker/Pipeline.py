@@ -70,7 +70,8 @@ class Pipeline:
             keypoints = self._convert_data(mssg.value)
             word_prediction = self.translator_model_pred(client_uuid)
             prediction_label, prediction_conf = self.converter.post_process_keypoints(word_prediction)
-            self.redis_client.rpush(client_uuid, json.dumps(keypoints))
+            print(f'The predicted label is {prediction_label} with {prediction_conf} confidence.')
+            self.redis_client.rpush(client_uuid, json.dumps(prediction_label))
 
     def _translator_model_pred(self, client_uuid):
         # send post request to the ai model server

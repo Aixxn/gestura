@@ -8,10 +8,10 @@ app = FastAPI(
         )
 
 
-@app.get('/translate')
+@app.post('/translate')
 async def translate():
     pass
 
-@app.get('/convert-sentence')
+@app.post('/convert-sentence')
 async def convert_sentence():
     pass
