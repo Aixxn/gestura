@@ -23,6 +23,9 @@ interface WebSocketState {
   reconnectAttempts: number;
 }
 
+const WS_BASE_URL = __DEV__ 
+  ? 'ws://192.168.1.27:9898' 
+  : 'ws://192.168.1.27:9898';
 export const useGesturaWebSocket = ({
   uuid,
   enabled = true,

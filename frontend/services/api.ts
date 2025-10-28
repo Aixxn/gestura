@@ -1,8 +1,9 @@
 import axios from 'axios';
-import { API_BASE_URL, logEnvironment } from '../config/environment';
 
-// Log environment configuration on import
-logEnvironment();
+// API Configuration
+const API_BASE_URL = __DEV__ 
+  ? 'http://192.168.1.27:8080' // USB tethered device - your computer's IP
+  : 'http://192.168.1.27:8080'; // Real device
 
 const apiClient = axios.create({
   baseURL: API_BASE_URL,
@@ -112,9 +113,9 @@ export const gesturaAPI = {
 
 // WebSocket connection helper
 export const createWebSocketConnection = (uuid: string): WebSocket => {
-  // Import WS_BASE_URL from environment config
-  const { WS_BASE_URL } = require('../config/environment');
-  const WS_URL = `${WS_BASE_URL}?uuid=${uuid}`;
+  const WS_URL = __DEV__ 
+    ? `ws://192.168.1.27:9898?uuid=${uuid}` // USB tethered device - your computer's IP
+    : `ws://192.168.1.27:9898?uuid=${uuid}`; // Real device
 
   console.log(`Connecting to WebSocket: ${WS_URL}`);
   return new WebSocket(WS_URL);
