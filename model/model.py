@@ -5,7 +5,11 @@ import os
 import numpy as np
 from sklearn.model_selection import train_test_split
 
+<<<<<<< HEAD
 def create_model(num_classes, seq_length=80, feature_dim=1663, 
+=======
+def create_model(snum_classes, eq_length=80, feature_dim=1662, 
+>>>>>>> 89d2d5c (added model.py for model trianing.)
                                   lstm_units=256, d_model=256, num_heads=4,
                                   ff_dim=512, dropout=0.3):
     inputs = layers.Input(shape=(seq_length, feature_dim))
@@ -39,12 +43,20 @@ def create_model(num_classes, seq_length=80, feature_dim=1663,
 
 
 if __name__ == "__main__":
+<<<<<<< HEAD
     sign_classes = os.listdir('/mnt/hdd/Downloads/keypoint_data_selected_augmented')
+=======
+    sign_classes = os.listdir('keypoint_data_augmented')
+>>>>>>> 89d2d5c (added model.py for model trianing.)
     
     x, y = [], []
 
     for label, gesture in enumerate(sign_classes):
+<<<<<<< HEAD
         gesture_dir = os.path.join('/mnt/hdd/Downloads/keypoint_data_selected_augmented', gesture)
+=======
+        gesture_dir = os.path.join("keypoint_data_augmented", gesture)
+>>>>>>> 89d2d5c (added model.py for model trianing.)
         files = [os.path.join(gesture_dir, f) for f in os.listdir(gesture_dir) if f.endswith(".npy")]
         
         for f in files:
@@ -80,6 +92,14 @@ if __name__ == "__main__":
             metrics=['accuracy']
             )
 
+<<<<<<< HEAD
+=======
+    history = model.fit(
+            X_train,
+            y_train,
+            )
+
+>>>>>>> 89d2d5c (added model.py for model trianing.)
     early_stopping = EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True)
     checkpoint = ModelCheckpoint('best_model.keras', save_best_only=True, monitor='val_accuracy')
 
