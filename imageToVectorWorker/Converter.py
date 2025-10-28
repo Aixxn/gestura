@@ -17,18 +17,17 @@ smoothing_type = 'mean'       # 'ema' or 'mean'
 
 
 class Converter:
-    # state
-    self.frame_buffer = deque(maxlen=WINDOW_SIZE)   # stores per-frame keypoints (1662,)
-    self.pred_history = deque(maxlen=SMOOTHING_WINDOW)  # stores recent softmax vectors
-    self.stable_counter = 0
-    self.last_emitted_label = None
-    self.cooldown_counter = 0
-    self.ema_state = None  # for EMA smoothing (np.array of shape (num_classes,))
-
     def __init__(self):
+        # state
+        self.frame_buffer = deque(maxlen=WINDOW_SIZE)   # stores per-frame keypoints (1662,)
+        self.pred_history = deque(maxlen=SMOOTHING_WINDOW)  # stores recent softmax vectors
+        self.stable_counter = 0
+        self.last_emitted_label = None
+        self.cooldown_counter = 0
+        self.ema_state = None  # for EMA smoothing (np.array of shape (num_classes,))
         self.mp_model = mp.solutions.holistic.Holistic()
 
-    def post_process_keypoints(self, pred)
+    def post_process_keypoints(self, pred):
         # store raw probs history for mean smoothing if needed
         self.pred_history.append(pred)
 
