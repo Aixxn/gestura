@@ -22,7 +22,6 @@ class ConvertSentenceResponse(BaseModel):
     translated: str
     success: bool
     error: str | None = None
-<<<<<<< HEAD
 
 
 # ASL Grammar Fixer Class
@@ -70,7 +69,6 @@ ASL: "YOU LIKE COFFEE?" → "Do you like coffee?"
 grammar_fixer = ASLGrammarFixer()
 
 
-=======
 
 
 # ASL Grammar Fixer Class
@@ -118,12 +116,10 @@ grammar_fixer = ASLGrammarFixer()
 
 
 # API Endpoints
-@app.get('/translate')
->>>>>>> 44a31d4 (Restore full translation service implementation)
+@app.post('/translate')
 async def translate():
     """Legacy endpoint - placeholder"""
     return {"message": "Use /convert-sentence endpoint"}
-
 
 @app.post('/convert-sentence', response_model=ConvertSentenceResponse)
 async def convert_sentence(request: ConvertSentenceRequest):
