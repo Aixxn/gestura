@@ -285,4 +285,35 @@ export const cameraStyles = StyleSheet.create({
     color: COLORS.darkGrey,
     fontWeight: '600',
   },
+  statusDisplayContainer: {
+    position: 'absolute',
+    top: 80,
+    left: 10,
+    right: 10,
+    backgroundColor: 'rgba(217, 216, 216, 0.72)',
+    padding: 10,
+    borderRadius: 10,
+    borderWidth: 2,
+  },
+  statusDisplayConnected: {
+    borderColor: '#48e6f7ff',
+  },
+  statusDisplayDisconnected: {
+    borderColor: '#ff4444',
+  },
+  statusDisplayTitle: {
+    color: '#f3f3f3ec',
+    fontSize: 16,
+    fontWeight: 'bold',
+    marginBottom: 5,
+  },
+  statusDisplaySession: {
+    color: 'white',
+    fontSize: 10,
+    marginBottom: 3,
+  },
+  statusDisplayFrame: {
+    color: 'white',
+    fontSize: 12,
+  },
 });

@@ -4,40 +4,85 @@ import { Image, ImageBackground, Text, TouchableOpacity, View} from 'react-nativ
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { cameraStyles } from '../../constants/styles';
 import * as Speech from 'expo-speech';
+import { useGesturaAPI } from '../../hooks/useGesturaAPI';
+import { useGesturaWebSocket } from '../../hooks/useGesturaWebSocket';
+
 interface CapturedFrame {
   id: string;
   width: number;
   height: number;
   timestamp: number;
 }
+
 export default function CameraComponent() {
   const { hasPermission, requestPermission } = useCameraPermission();
   const [isActive, setIsActive] = useState(false);
-  const [translationText, setTranslationText] = useState('');
   const [isPlaying, setIsPlaying] = useState(false);
   const [isFrontCamera, setIsFrontCamera] = useState(true);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [capturedFrames, setCapturedFrames] = useState<CapturedFrame[]>([]);
   const [currentFrameInfo, setCurrentFrameInfo] = useState<{ width: number; height: number; timestamp: number } | null>(null);
+  
   const device = useCameraDevice(isFrontCamera ? 'front' : 'back');
   const camera = useRef<Camera>(null);
   const frameCount = useRef(0);
   const captureIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // HTTP API integration (for sending frames)
+  const { 
+    sessionUUID, 
+    sendFrame,
+    stopProcessing,
+    isSending,
+  } = useGesturaAPI();
+
+  // WebSocket integration (for receiving translations)
+  const {
+    translation,
+    isConnected,
+    isConnecting,
+    error: wsError,
+    connect: connectWebSocket,
+    disconnect: disconnectWebSocket,
+    clearTranslation,
+  } = useGesturaWebSocket({
+    uuid: sessionUUID,
+    enabled: isActive, // Only connect when camera is active
+    autoReconnect: true,
+    reconnectInterval: 3000,
+    maxReconnectAttempts: 5,
+  });
+
+  // Update translation text when received from WebSocket
+  useEffect(() => {
+    if (translation) {
+      console.log('Translation received:', translation);
+    }
+  }, [translation]);
 
   const onError = useCallback((error: any) => {
     console.error('Camera error:', error);
     setCameraError(error.message || 'Camera error occurred');
   }, []);
 
-  // Capture frames at regular intervals when active
+  // Capture and send frames at regular intervals when active
   useEffect(() => {
     if (isActive && currentFrameInfo) {
       if (captureIntervalRef.current) {
         clearInterval(captureIntervalRef.current);
       }
       
-      captureIntervalRef.current = setInterval(() => {
-        if (currentFrameInfo) {
+      captureIntervalRef.current = setInterval(async () => {
+        if (!camera.current) return;
+
+        try {
+          // Take photo from camera
+          const photo = await camera.current.takePhoto({
+            flash: 'off',
+            enableShutterSound: false,
+          });
+
+          // Update frame count and display
           const newFrame: CapturedFrame = {
             id: `frame_${frameCount.current++}`,
             width: currentFrameInfo.width,
@@ -46,9 +91,16 @@ export default function CameraComponent() {
           };
           
           setCapturedFrames(prev => [...prev.slice(-9), newFrame]);
-          console.log(`Frame captured: ${newFrame.width}x${newFrame.height} @ ${newFrame.timestamp}ms - Total: ${frameCount.current}`);
-          
-          // TODO: Send frame data to your sign language detection backend
+          console.log(`Frame captured: ${newFrame.width}x${newFrame.height} - Total: ${frameCount.current}`);
+
+          // Send frame to API Gateway (COMMENTED OUT FOR WEBSOCKET TESTING)
+          // if (photo && sessionUUID) {
+          //   // Send the file path directly
+          //   await sendFrame(photo.path);
+          //   console.log(`Frame sent to API with UUID: ${sessionUUID}`);
+          // }
+        } catch (error) {
+          console.error('Failed to capture/send frame:', error);
         }
       }, 500);
     } else {
@@ -56,16 +108,13 @@ export default function CameraComponent() {
         clearInterval(captureIntervalRef.current);
         captureIntervalRef.current = null;
       }
-    }
-    
+    } 
     return () => {
       if (captureIntervalRef.current) {
         clearInterval(captureIntervalRef.current);
       }
     };
-  }, [isActive, currentFrameInfo]);
-
-  // Frame processor - just updates frame info
+  }, [isActive, currentFrameInfo, camera, sessionUUID, sendFrame]);
   const frameProcessor = useFrameProcessor((frame) => {
     'worklet';
     // Store frame info for capture (runs on every frame but doesn't capture)
@@ -74,8 +123,6 @@ export default function CameraComponent() {
       height: frame.height,
       timestamp: frame.timestamp
     };
-    // Note: We can't directly call setCurrentFrameInfo here
-    // So we'll capture using intervals instead
   }, []);
 
   const toggleCameraFacing = useCallback(() => {
@@ -112,7 +159,7 @@ export default function CameraComponent() {
     );
   }
 
-  const handleTapToStart = () => {
+  const handleTapToStart = async () => {
     const newActiveState = !isActive;
     setIsActive(newActiveState);
     console.log('Sign language detection active:', newActiveState);
@@ -120,18 +167,26 @@ export default function CameraComponent() {
     if (newActiveState) {
       setCapturedFrames([]);
       frameCount.current = 0;
+      clearTranslation();
+      
+      // WebSocket will auto-connect via the hook when isActive becomes true
+      console.log(`WebSocket will connect with UUID: ${sessionUUID}`);
+      
       // Set initial frame info for immediate capture
       if (device) {
         setCurrentFrameInfo({ width: 1920, height: 1080, timestamp: Date.now() });
       }
-      console.log('Started capturing frames...');
+      console.log('Started capturing and sending frames...');
     } else {
-      console.log('Stopped capturing. Total frames:', frameCount.current);
+      // Stop processing and disconnect
+      await stopProcessing();
+      // WebSocket will auto-disconnect via the hook when isActive becomes false
+      console.log(`Stopped capturing. Total frames: ${frameCount.current}`);
     }
   };
 
   const handleTextToSpeech = async () => {
-    const textToSpeak = translationText || 'Your Translation will appear here';
+    const textToSpeak = translation || 'Your Translation will appear here';
     
     if (isPlaying) {
       // Stop speaking if already playing
@@ -179,6 +234,7 @@ export default function CameraComponent() {
         device={device}
         isActive={true}                
         video={true}
+        photo={true}
         audio={false}
         frameProcessor={frameProcessor}
         onError={onError}
@@ -199,32 +255,25 @@ export default function CameraComponent() {
 
         {/* Frame Processing Status Display */}
         {isActive && (
-          <View style={{ 
-            position: 'absolute', 
-            top: 80, 
-            left: 10, 
-            right: 10,
-            backgroundColor: 'rgba(217, 216, 216, 0.72)',
-            padding: 10,
-            borderRadius: 10,
-            borderWidth: 2,
-            borderColor: '#48e6f7ff'
-          }}>
-            <Text style={{ 
-              color: '#f3f3f3ec', 
-              fontSize: 16, 
-              fontWeight: 'bold',
-              marginBottom: 5 
-            }}>
-              RECORDING - Frames Captured: {capturedFrames.length}
+          <View style={[
+            cameraStyles.statusDisplayContainer,
+            isConnected ? cameraStyles.statusDisplayConnected : cameraStyles.statusDisplayDisconnected
+          ]}>
+            <Text style={cameraStyles.statusDisplayTitle}>
+              {isConnected ? '🟢 CONNECTED' : isConnecting ? '� CONNECTING' : '🔴 DISCONNECTED'} - Frames: {capturedFrames.length}
             </Text>
+            <Text style={cameraStyles.statusDisplaySession}>
+              Session: {sessionUUID.substring(0, 8)}...
+            </Text>
+            {wsError && (
+              <Text style={[cameraStyles.statusDisplayFrame, { color: '#ff6b6b' }]}>
+                Error: {wsError}
+              </Text>
+            )}
             {capturedFrames.length > 0 && (
               <View>
-                <Text style={{ color: 'white', fontSize: 12 }}>
+                <Text style={cameraStyles.statusDisplayFrame}>
                   Latest Frame: {capturedFrames[capturedFrames.length - 1].width}x{capturedFrames[capturedFrames.length - 1].height}
-                </Text>
-                <Text style={{ color: 'white', fontSize: 10 }}>
-                  Timestamp: {capturedFrames[capturedFrames.length - 1].timestamp}ms
                 </Text>
               </View>
             )}
@@ -232,8 +281,8 @@ export default function CameraComponent() {
         )}
         <View style={cameraStyles.translationContainer}>
           <View style={cameraStyles.translationContent}>
-            {translationText ? (
-              <Text style={cameraStyles.translationText}>{translationText}</Text>
+            {translation ? (
+              <Text style={cameraStyles.translationText}>{translation}</Text>
             ) : (
               <Text style={cameraStyles.placeholderText}>Your Translation will appear here...</Text>
             )}

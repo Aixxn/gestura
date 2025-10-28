@@ -1,5 +1,5 @@
 services:
-  apiGateway:
+  apigateway:
     image: baronocasiones/gestura-apigateway:dev
     ports: 
       - "8080:8080"
