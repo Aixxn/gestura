@@ -1,12 +1,27 @@
 from fastapi import FastAPI
+from pydantic import BaseModel
+from groq import Groq
+import os
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 app = FastAPI(
         debug=True, 
         title='Translator Service', 
-        description='This service is responsible for service\
-                the translator ai model.'
+        description='This service is responsible for servicing\
+                the translator AI model.'
         )
+# Request/Response Models
+class ConvertSentenceRequest(BaseModel):
+    asl_gloss: str
 
+class ConvertSentenceResponse(BaseModel):
+    original: str
+    translated: str
+    success: bool
+    error: str | None = None
 
 
 # ASL Grammar Fixer Class
@@ -56,8 +71,8 @@ grammar_fixer = ASLGrammarFixer()
 # API Endpoints
 @app.post('/translate')
 async def translate():
-    pass
-
+    """Legacy endpoint - placeholder"""
+    return {"message": "Use /convert-sentence endpoint"}
 
 
 @app.post('/convert-sentence', response_model=ConvertSentenceResponse)
