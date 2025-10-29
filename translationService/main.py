@@ -22,7 +22,6 @@ class ConvertSentenceResponse(BaseModel):
     translated: str
     success: bool
     error: str | None = None
-<<<<<<< HEAD
 
 
 # ASL Grammar Fixer Class
@@ -70,7 +69,6 @@ ASL: "YOU LIKE COFFEE?" → "Do you like coffee?"
 grammar_fixer = ASLGrammarFixer()
 
 
-<<<<<<< HEAD
 # API Endpoints
 @app.post('/translate')
 async def translate():
@@ -78,8 +76,6 @@ async def translate():
     return {"message": "Use /convert-sentence endpoint"}
 
 
-=======
-=======
 
 
 # ASL Grammar Fixer Class
@@ -91,7 +87,6 @@ class ASLGrammarFixer:
         self.system_prompt = """You are an expert in American Sign Language (ASL) grammar conversion.
 Convert ASL gloss text (space-separated signs) into natural, grammatically correct English.
 
->>>>>>> cdfe8cd (Restore full translation service implementation)
 Rules:
 - ASL uses topic-comment structure
 - No verb conjugations in ASL
@@ -127,16 +122,11 @@ ASL: "YOU LIKE COFFEE?" → "Do you like coffee?"
 grammar_fixer = ASLGrammarFixer()
 
 
-<<<<<<< HEAD
-=======
 # API Endpoints
-@app.get('/translate')
->>>>>>> 44a31d4 (Restore full translation service implementation)
->>>>>>> cdfe8cd (Restore full translation service implementation)
+@app.post('/translate')
 async def translate():
     """Legacy endpoint - placeholder"""
     return {"message": "Use /convert-sentence endpoint"}
-
 
 @app.post('/convert-sentence', response_model=ConvertSentenceResponse)
 async def convert_sentence(request: ConvertSentenceRequest):
