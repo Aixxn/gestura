@@ -4,6 +4,7 @@ import threading
 import redis
 import socket
 import json
+import requests
 
 KAFKA_PORT = 9092
 REDIS_PORT = 6379
@@ -11,6 +12,8 @@ KAFKA_LOCAL_HOST_SERVER = 'kafka:' + str(KAFKA_PORT)
 REDIS_HOST = 'redis'
 NUM_PIPELINE_INSTANCE = 1
 ENCRIPTION_TYPE = 'utf-8'
+
+
 
 class Pipeline:
     def __init__(self, instance_id):
@@ -32,13 +35,10 @@ class Pipeline:
             value_serializer=lambda v: json.dumps(v).encode(ENCRIPTION_TYPE)
         )
 
-    def _convert_data(self, data):
-        # bug here, still don't know what kind of data type needed by the translation model
-        # currently returning a list of float32
-        result = self.converter.point_detection(data)
-        keypoints = self.converter.extract_keypoints(result)
-        keypoints = self.converter.process_new_frame(keypoints)
-        return keypoints
+    def _convert_data(self, image_bytes):
+        keypoints = self.converter.point_detection(image_bytes)
+        window = self.converter.process_new_frame(keypoints)
+        return window
 
     def start_consuming(self):
         print(f'Pipeline {self.instance_id}: Listening for data...')
@@ -58,24 +58,46 @@ class Pipeline:
                 try:
                     decoded_value = mssg_value.decode(ENCRIPTION_TYPE)
                 except UnicodeDecodeError:
-                    decoded_value = None
+                    decoded_value = mssg_value
+            else:
+                continue
 
             client_uuid = mssg.key.decode(ENCRIPTION_TYPE)
 
             if decoded_value == 'stop':
-                self._convert_vector_to_words(client_uuid)
+                self.converter.stop()
+                self._convert_to_english_sentence(client_uuid)
                 self.redis_client.delete(client_uuid)
                 continue
 
-            keypoints = self._convert_data(mssg.value)
-            word_prediction = self.translator_model_pred(client_uuid)
+            word_prediction = self._translator_model_pred(decoded_value)
+            print('PREDICTION:', word_prediction)
+            if word_prediction is None:
+                print('WORD PREDICTION IS NONE')
+                continue
             prediction_label, prediction_conf = self.converter.post_process_keypoints(word_prediction)
             print(f'The predicted label is {prediction_label} with {prediction_conf} confidence.')
             self.redis_client.rpush(client_uuid, json.dumps(prediction_label))
 
-    def _translator_model_pred(self, client_uuid):
-        # send post request to the ai model server
-        pass
+    def _convert_to_english_sentence(self, uuid):
+        #NOT YET DONE IMPLEMENTING
+        ai_model_url = 'https://baronocasiones-gestura.hf.space/convert-sentence'
+        asl_grammar = self.redis_client.get(uuid)
+        payload = {'asl_gloss': asl_grammar}
+        response = requests.post(ai_model_url, json=payload).text
+
+    def _translator_model_pred(self, keypoints):
+        ai_model_url = 'https://baronocasiones-gestura.hf.space/translate'
+        keypoints = self._convert_data(keypoints)
+        if keypoints is None:
+            return 
+        print('KEYPOINTS SHAPE:', keypoints.shape)
+        print('KEYPOINTS BEFORE SENDING:', keypoints)
+        payload = {'window_data': keypoints.tolist()}
+        response = requests.post(ai_model_url, json=payload).text
+        print('API RESPONSE:', response)
+        pred = json.loads(response).get('pred')
+        return pred
 
 
 if __name__ == '__main__':
@@ -98,9 +120,5 @@ if __name__ == '__main__':
 
     except KeyboardInterrupt:
         print('\nShutting down pipelines...')
-
-
-
-
 
 

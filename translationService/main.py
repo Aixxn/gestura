@@ -146,7 +146,7 @@ async def translate(data: WindowInput):
     predicted_word = WORD_MAPPING[predicted_index]
 
     # 8. Return the word as the API response
-    return predicted_word
+    return {'pred': predicted_word}
 
 @app.post('/convert-sentence', response_model=ConvertSentenceResponse)
 async def convert_sentence(request: ConvertSentenceRequest):

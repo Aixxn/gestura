@@ -27,6 +27,9 @@ class Converter:
         self.ema_state = None  # for EMA smoothing (np.array of shape (num_classes,))
         self.mp_model = mp.solutions.holistic.Holistic()
 
+    def get_asl_grammar(self):
+        return split(self.pred_history)
+
     def post_process_keypoints(self, pred):
         # store raw probs history for mean smoothing if needed
         self.pred_history.append(pred)
@@ -40,7 +43,7 @@ class Converter:
 
         # cooldown handling
         if self.cooldown_counter > 0:
-            cooldown_counter -= 1
+            self.cooldown_counter -= 1
             return None
 
         # stability check
@@ -56,8 +59,8 @@ class Converter:
                 self.stable_counter += 1
                 if self.stable_counter >= STABILITY_COUNT:
                     # confirmed detection
-                    last_emitted_label = predicted_label
-                    cooldown_counter = COOLDOWN_STEPS
+                    self.last_emitted_label = predicted_label
+                    self.cooldown_counter = COOLDOWN_STEPS
                     self.stable_counter = 0
                     # return the label (or process further e.g. append to sentence)
                     return predicted_label, predicted_conf
@@ -81,11 +84,11 @@ class Converter:
         image = cv.cvtColor(cv_image, cv.COLOR_BGR2RGB)
         image.flags.writeable = False
         results = self.mp_model.process(image)
-        preprocessed_result = self._preprocess_landmark_sequence(results)
-        self.frame_buffer.append(preprocessed_result)
+        keypoints = self.extract_keypoints(results)
+        self.frame_buffer.append(keypoints)
         image.flags.writeable = True
         self.image = cv.cvtColor(image, cv.COLOR_RGB2BGR)
-        return preprocessed_result
+        return keypoints
 
     def extract_keypoints(self, results):
         '''
@@ -124,6 +127,11 @@ class Converter:
 
         return lm_list
 
+    def stop(self):
+        pred_list = list(self.pred_history)
+        window = pred_list[-min(len(pred_list), WINDOW_SIZE):]
+        smoothed_pred = np.mean(window, axis=0)
+
     def update_smoothing(self, new_probs):
         if smoothing_type == 'ema':
             if self.ema_state is None:
@@ -133,6 +141,8 @@ class Converter:
             return self.ema_state
         else:
             # mean smoothing using pred_history
+            print('HISTORY:', self.pred_history)
+            print('LEN OF HISTORY:', len(self.pred_history))
             arr = np.stack(list(self.pred_history) + [new_probs]) if len(self.pred_history) > 0 else new_probs
             return arr.mean(axis=0)
 
@@ -145,19 +155,13 @@ class Converter:
           - append to frame_buffer
           - every STRIDE frames, if we have WINDOW_SIZE frames, run inference + smoothing + detection
         """
-        # if not enough frames yet, just wait
         if len(self.frame_buffer) < WINDOW_SIZE:
             return None
 
-        # evaluate only every STRIDE frames (to reduce compute)
-        # we use a simple frame counter approach; you can use timestamps instead
-        process_new_frame.counter = getattr(process_new_frame, 'counter', 0) + 1
-        if process_new_frame.counter % STRIDE != 0:
+        self.frame_counter = getattr(self, 'frame_counter', 0) + 1
+        if self.frame_counter % STRIDE != 0:
             return None
 
-        # prepare window (stack into (W, D))
-        window = np.stack(self.frame_buffer)  # newest 80 frames
+        return np.stack(self.frame_buffer)
 
-        # optional: you might center crop or randomly jitter in production for robustness
-        return window
 
