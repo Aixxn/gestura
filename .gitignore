@@ -10,11 +10,10 @@
 **/.venv/
 **/.pytest_cache/
 **/__pycache__/
-<<<<<<< HEAD
 **/.env
-=======
 **/.ipynb_checkpoints/
->>>>>>> d2c07b5c8e5ad7a53e4f92d97f0afec924f5e5f9
+**/*.keras
+**/keypoint_data_*/
 
 
 # docker
