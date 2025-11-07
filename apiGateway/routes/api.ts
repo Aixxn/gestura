@@ -3,13 +3,14 @@ import { Kafka } from 'kafkajs';
 import multer from 'multer';
 import { WebSocketServer, WebSocket } from 'ws'
 
-const WEB_SOCKET_HOST = 'localhost';
+const WEB_SOCKET_HOST = '0.0.0.0';
 const WEB_SOCKET_PORT = 9898;
 const KAFKA_BROKER = process.env.KAFKA_BROKER || 'kafka:9092';
 
+
 const router = express.Router();
 const kafka = new Kafka({ clientId: 'rawImageProducer', brokers: [ KAFKA_BROKER ] });
-const producer = kafka.producer();
+const producer = kafka.producer({maxInFlightRequests: 1});
 const consumer = kafka.consumer({ groupId: 'translatedSignConsumer' });
 const wss = new WebSocketServer({ host: WEB_SOCKET_HOST, port: WEB_SOCKET_PORT });
 const sessionMap = new Map();
@@ -48,7 +49,7 @@ const upload = multer();
 
                 const targetWs: WebSocket = sessionMap.get(resultKey);
 
-                if (targetWs && targetWs.readyState != targetWs.OPEN) {
+                if (targetWs && targetWs.readyState == targetWs.OPEN) {
                     targetWs.send(resultValue);
                     console.log(`Pushed result for ${resultKey} to WebSocket`);
                 } else{
@@ -82,8 +83,8 @@ wss.on('connection', async (ws, req) => {
 });
 
 // endpoints
-router.post('/stop', async (req, res) => {
-    const uuid = req.body.uuid;
+router.get('/stop/:uuid', async (req, res) => {
+    const uuid = req.params.uuid;
 
     if (!uuid) {
         console.error('No uuid sent.')

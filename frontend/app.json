@@ -8,6 +8,10 @@
     "scheme": "gestura",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
+    "extra": {
+      "apiUrl": "http://YOUR_SERVER_IP:8080",
+      "wsUrl": "ws://YOUR_SERVER_IP:9898"
+    },
     "ios": {
       "supportsTablet": true
     },
@@ -23,8 +27,7 @@
       "permissions": [
         "android.permission.CAMERA",
         "android.permission.RECORD_AUDIO",
-        "android.permission.CAMERA",
-        "android.permission.RECORD_AUDIO"
+        "android.permission.INTERNET"
       ],
       "package": "com.anonymous.gestura"
     },

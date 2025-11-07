@@ -6,6 +6,7 @@
  */
 
 import { useEffect, useRef, useState, useCallback } from 'react';
+import { WS_BASE_URL } from '../config/environment';
 
 interface UseGesturaWebSocketProps {
   uuid: string;
@@ -25,7 +26,6 @@ interface WebSocketState {
 const WS_BASE_URL = __DEV__ 
   ? 'ws://192.168.1.27:9898' 
   : 'ws://192.168.1.27:9898';
-
 export const useGesturaWebSocket = ({
   uuid,
   enabled = true,
