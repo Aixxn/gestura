@@ -1,4 +1,4 @@
-import { Camera, useCameraDevice, useCameraPermission, useFrameProcessor } from 'react-native-vision-camera';
+import { Camera, useCameraDevice, useCameraPermission } from 'react-native-vision-camera';
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { Image, ImageBackground, Text, TouchableOpacity, View} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -14,6 +14,12 @@ interface CapturedFrame {
   timestamp: number;
 }
 
+interface QueuedFrame {
+  id: string;
+  path: string;
+  timestamp: number;
+}
+
 export default function CameraComponent() {
   const { hasPermission, requestPermission } = useCameraPermission();
   const [isActive, setIsActive] = useState(false);
@@ -21,12 +27,17 @@ export default function CameraComponent() {
   const [isFrontCamera, setIsFrontCamera] = useState(true);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [capturedFrames, setCapturedFrames] = useState<CapturedFrame[]>([]);
-  const [currentFrameInfo, setCurrentFrameInfo] = useState<{ width: number; height: number; timestamp: number } | null>(null);
   
   const device = useCameraDevice(isFrontCamera ? 'front' : 'back');
   const camera = useRef<Camera>(null);
   const frameCount = useRef(0);
   const captureIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  
+  // Frame queue system - max 80 frames
+  const frameQueue = useRef<QueuedFrame[]>([]);
+  const isProcessingQueue = useRef(false);
+  const isStopping = useRef(false);
+  const MAX_QUEUE_SIZE = 80;
 
   // HTTP API integration (for sending frames)
   const { 
@@ -47,7 +58,7 @@ export default function CameraComponent() {
     clearTranslation,
   } = useGesturaWebSocket({
     uuid: sessionUUID,
-    enabled: isActive, // Only connect when camera is active
+    enabled: true, // Keep WebSocket always connected
     autoReconnect: true,
     reconnectInterval: 3000,
     maxReconnectAttempts: 5,
@@ -60,6 +71,57 @@ export default function CameraComponent() {
     }
   }, [translation]);
 
+  // Frame queue processor - continuously sends frames from queue
+  const processFrameQueue = useCallback(async () => {
+    if (isProcessingQueue.current || frameQueue.current.length === 0) {
+      return;
+    }
+
+    isProcessingQueue.current = true;
+
+    while (frameQueue.current.length > 0) {
+      const frame = frameQueue.current.shift();
+      
+      if (!frame) break;
+
+      try {
+        console.log(`Processing queued frame: ${frame.id} (${frameQueue.current.length} remaining in queue)`);
+        await sendFrame(frame.path);
+        console.log(`Frame ${frame.id} sent successfully`);
+      } catch (error) {
+        console.error(`Failed to send frame ${frame.id}:`, error);
+        // Continue processing even if one frame fails
+      }
+
+      // Small delay to prevent overwhelming the backend
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+
+    isProcessingQueue.current = false;
+    
+    // If we're stopping and queue is empty, complete the stop process
+    if (isStopping.current && frameQueue.current.length === 0) {
+      console.log('All queued frames sent. Stop process complete.');
+      isStopping.current = false;
+    }
+  }, [sendFrame]);
+
+  // Add frame to queue (max 80 frames)
+  const addFrameToQueue = useCallback((frame: QueuedFrame) => {
+    // If queue is full, wait for it to have space
+    // Frame will still be added - backend will process when ready
+    if (frameQueue.current.length >= MAX_QUEUE_SIZE) {
+      console.log(`Queue at capacity (${MAX_QUEUE_SIZE}). Frame queued, will process when backend catches up.`);
+    }
+    
+    frameQueue.current.push(frame);
+    console.log(`Frame added to queue. Queue size: ${frameQueue.current.length}/${MAX_QUEUE_SIZE}`);
+    
+    // Trigger queue processing
+    processFrameQueue();
+    return true; // Always indicate success
+  }, [processFrameQueue, MAX_QUEUE_SIZE]);
+
   const onError = useCallback((error: any) => {
     console.error('Camera error:', error);
     setCameraError(error.message || 'Camera error occurred');
@@ -67,13 +129,13 @@ export default function CameraComponent() {
 
   // Capture and send frames at regular intervals when active
   useEffect(() => {
-    if (isActive && currentFrameInfo) {
+    if (isActive) {
       if (captureIntervalRef.current) {
         clearInterval(captureIntervalRef.current);
       }
       
       captureIntervalRef.current = setInterval(async () => {
-        if (!camera.current) return;
+        if (!camera.current || isStopping.current) return;
 
         try {
           // Take photo from camera
@@ -84,23 +146,27 @@ export default function CameraComponent() {
 
           // Update frame count and display
           const newFrame: CapturedFrame = {
-            id: `frame_${frameCount.current++}`,
-            width: currentFrameInfo.width,
-            height: currentFrameInfo.height,
+            id: `frame_${frameCount.current}`,
+            width: 1920, // Default camera resolution
+            height: 1080,
             timestamp: Date.now(),
           };
           
+          frameCount.current++;
           setCapturedFrames(prev => [...prev.slice(-9), newFrame]);
           console.log(`Frame captured: ${newFrame.width}x${newFrame.height} - Total: ${frameCount.current}`);
 
-          // Send frame to API Gateway (COMMENTED OUT FOR WEBSOCKET TESTING)
-          // if (photo && sessionUUID) {
-          //   // Send the file path directly
-          //   await sendFrame(photo.path);
-          //   console.log(`Frame sent to API with UUID: ${sessionUUID}`);
-          // }
+          // Add frame to queue instead of sending directly
+          if (photo && sessionUUID) {
+            const queuedFrame: QueuedFrame = {
+              id: newFrame.id,
+              path: photo.path,
+              timestamp: newFrame.timestamp,
+            };
+            addFrameToQueue(queuedFrame);
+          }
         } catch (error) {
-          console.error('Failed to capture/send frame:', error);
+          console.error('Failed to capture frame:', error);
         }
       }, 500);
     } else {
@@ -114,16 +180,7 @@ export default function CameraComponent() {
         clearInterval(captureIntervalRef.current);
       }
     };
-  }, [isActive, currentFrameInfo, camera, sessionUUID, sendFrame]);
-  const frameProcessor = useFrameProcessor((frame) => {
-    'worklet';
-    // Store frame info for capture (runs on every frame but doesn't capture)
-    const frameInfo = {
-      width: frame.width,
-      height: frame.height,
-      timestamp: frame.timestamp
-    };
-  }, []);
+  }, [isActive, camera, sessionUUID, addFrameToQueue]);
 
   const toggleCameraFacing = useCallback(() => {
     setIsFrontCamera(!isFrontCamera);
@@ -165,23 +222,37 @@ export default function CameraComponent() {
     console.log('Sign language detection active:', newActiveState);
     
     if (newActiveState) {
+      // Starting detection
+      isStopping.current = false;
       setCapturedFrames([]);
       frameCount.current = 0;
+      frameQueue.current = []; // Clear any existing queue
       clearTranslation();
       
-      // WebSocket will auto-connect via the hook when isActive becomes true
       console.log(`WebSocket will connect with UUID: ${sessionUUID}`);
-      
-      // Set initial frame info for immediate capture
-      if (device) {
-        setCurrentFrameInfo({ width: 1920, height: 1080, timestamp: Date.now() });
-      }
       console.log('Started capturing and sending frames...');
     } else {
-      // Stop processing and disconnect
-      await stopProcessing();
-      // WebSocket will auto-disconnect via the hook when isActive becomes false
-      console.log(`Stopped capturing. Total frames: ${frameCount.current}`);
+      // Stopping detection - process remaining frames in queue
+      console.log(`Stopping capture. Processing ${frameQueue.current.length} remaining frames in queue...`);
+      isStopping.current = true;
+      
+      // Wait for queue to be fully processed
+      const checkQueueEmpty = setInterval(() => {
+        if (frameQueue.current.length === 0 && !isProcessingQueue.current) {
+          clearInterval(checkQueueEmpty);
+          console.log(`All frames processed. Total frames captured: ${frameCount.current}`);
+          
+          // Now stop the backend processing
+          stopProcessing().then(() => {
+            console.log('Backend processing stopped');
+          });
+        } else {
+          console.log(`Waiting for queue to empty... ${frameQueue.current.length} frames remaining`);
+        }
+      }, 500);
+      
+      // No timeout - will process ALL frames no matter how long it takes
+      console.log('Will process all frames without timeout. Queue will be fully flushed.');
     }
   };
 
@@ -236,7 +307,6 @@ export default function CameraComponent() {
         video={true}
         photo={true}
         audio={false}
-        frameProcessor={frameProcessor}
         onError={onError}
         />
           </View>
@@ -260,14 +330,19 @@ export default function CameraComponent() {
             isConnected ? cameraStyles.statusDisplayConnected : cameraStyles.statusDisplayDisconnected
           ]}>
             <Text style={cameraStyles.statusDisplayTitle}>
-              {isConnected ? '🟢 CONNECTED' : isConnecting ? '� CONNECTING' : '🔴 DISCONNECTED'} - Frames: {capturedFrames.length}
+              {isConnected ? 'CONNECTED' : isConnecting ? 'CONNECTING' : 'DISCONNECTED'} - Frames: {frameCount.current}
             </Text>
             <Text style={cameraStyles.statusDisplaySession}>
-              Session: {sessionUUID.substring(0, 8)}...
+              Session: {sessionUUID.substring(0, 8)}... | Queue: {frameQueue.current.length}/{MAX_QUEUE_SIZE}
             </Text>
             {wsError && (
               <Text style={[cameraStyles.statusDisplayFrame, { color: '#ff6b6b' }]}>
                 Error: {wsError}
+              </Text>
+            )}
+            {isStopping.current && (
+              <Text style={[cameraStyles.statusDisplayFrame, { color: '#ffd700' }]}>
+                Stopping... Processing {frameQueue.current.length} remaining frames
               </Text>
             )}
             {capturedFrames.length > 0 && (

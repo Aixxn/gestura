@@ -1,10 +1,24 @@
 import axios from 'axios';
+import { API_BASE_URL, WS_BASE_URL } from '../config/environment';
 
-// API Configuration
-const API_BASE_URL = __DEV__ 
-  ? 'http://192.168.1.27:8080' // USB tethered device - your computer's IP
-  : 'http://192.168.1.27:8080'; // Real device
+// TypeScript interfaces for API responses
+export interface ConvertImageResponse {
+  success: boolean;
+  message?: string;
+  data?: any;
+}
 
+export interface StopProcessingResponse {
+  success: boolean;
+  message: string;
+}
+
+export interface HealthCheckResponse {
+  status: string;
+  timestamp: number;
+}
+
+// API Configuration - now using centralized environment config
 const apiClient = axios.create({
   baseURL: API_BASE_URL,
   timeout: 30000, // 30 seconds
@@ -111,12 +125,9 @@ export const gesturaAPI = {
   },
 };
 
-// WebSocket connection helper
+// WebSocket connection helper - now using centralized environment config
 export const createWebSocketConnection = (uuid: string): WebSocket => {
-  const WS_URL = __DEV__ 
-    ? `ws://192.168.1.27:9898?uuid=${uuid}` // USB tethered device - your computer's IP
-    : `ws://192.168.1.27:9898?uuid=${uuid}`; // Real device
-
+  const WS_URL = `${WS_BASE_URL}?uuid=${uuid}`;
   console.log(`Connecting to WebSocket: ${WS_URL}`);
   return new WebSocket(WS_URL);
 };

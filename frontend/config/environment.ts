@@ -18,8 +18,8 @@ interface EnvironmentConfig {
 
 // Development: Local network (for testing during development)
 const DEVELOPMENT_CONFIG: EnvironmentConfig = {
-  API_URL: 'http://192.168.1.27:8080', // Your local Docker IP
-  WS_URL: 'ws://192.168.1.27:9898',
+  API_URL: 'http://192.168.1.29:8080', // Your local Docker IP
+  WS_URL: 'ws://192.168.1.29:9898',  
   isDevelopment: true,
 };
 

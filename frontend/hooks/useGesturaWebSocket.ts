@@ -1,9 +1,4 @@
-/**
- * Gestura WebSocket Hook
- * 
- * Dedicated hook for managing WebSocket connection to receive translations
- * This hook only handles receiving data, not sending
- */
+
 
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { WS_BASE_URL } from '../config/environment';
@@ -23,9 +18,6 @@ interface WebSocketState {
   reconnectAttempts: number;
 }
 
-const WS_BASE_URL = __DEV__ 
-  ? 'ws://192.168.1.27:9898' 
-  : 'ws://192.168.1.27:9898';
 export const useGesturaWebSocket = ({
   uuid,
   enabled = true,
