@@ -89,13 +89,11 @@ class Pipeline:
     def _translator_model_pred(self, keypoints):
         ai_model_url = 'https://baronocasiones-gestura.hf.space/translate'
         keypoints = self._convert_data(keypoints)
-        if keypoints is None:
+        if keypoints is None and not final_pred:
             return 
         print('KEYPOINTS SHAPE:', keypoints.shape)
-        print('KEYPOINTS BEFORE SENDING:', keypoints)
         payload = {'window_data': keypoints.tolist()}
         response = requests.post(ai_model_url, json=payload).text
-        print('API RESPONSE:', response)
         pred = json.loads(response).get('pred')
         return pred
 
