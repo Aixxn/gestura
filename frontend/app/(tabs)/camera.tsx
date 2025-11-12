@@ -49,21 +49,31 @@ export default function CameraComponent() {
   } = useGesturaAPI();
 
   // WebSocket integration (for receiving translations)
+  // Connection is persistent - only connects when UUID is ready, stays connected throughout
   const {
     translation,
     isConnected,
     isConnecting,
     error: wsError,
-    connect: connectWebSocket,
-    disconnect: disconnectWebSocket,
     clearTranslation,
   } = useGesturaWebSocket({
     uuid: sessionUUID,
-    enabled: true, // Keep WebSocket always connected
+    enabled: !!sessionUUID, // Only connect when UUID is ready, then stay connected
     autoReconnect: true,
     reconnectInterval: 3000,
     maxReconnectAttempts: 5,
   });
+
+  // Monitor WebSocket connection status
+  useEffect(() => {
+    if (isConnected) {
+      console.log('WebSocket connected successfully with UUID:', sessionUUID);
+    } else if (isConnecting) {
+      console.log('WebSocket connecting...');
+    } else {
+      console.log('WebSocket disconnected');
+    }
+  }, [isConnected, isConnecting, sessionUUID]);
 
   // Update translation text when received from WebSocket
   useEffect(() => {
