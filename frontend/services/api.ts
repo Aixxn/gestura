@@ -113,7 +113,7 @@ export const gesturaAPI = {
    * @returns Promise with response
    */
   stopProcessing: async (uuid: string) => {
-    return apiClient.post('/api/stop', { uuid });
+    return apiClient.get(`/api/stop/${uuid}`);
   },
 
   /**

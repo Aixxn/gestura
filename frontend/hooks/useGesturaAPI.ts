@@ -1,10 +1,3 @@
-/**
- * Gestura API Hook
- * 
- * Manages HTTP API calls to Gestura backend
- * For WebSocket connections, use useGesturaWebSocket hook
- */
-
 import { useEffect, useState, useCallback } from 'react';
 import { gesturaAPI } from '../services/api';
 import { generateUUID } from '../utils/helpers';
@@ -70,7 +63,6 @@ export const useGesturaAPI = () => {
     }
   }, [sessionUUID]);
 
-  // Health check
   const checkHealth = useCallback(async () => {
     try {
       const response = await gesturaAPI.healthCheck();
