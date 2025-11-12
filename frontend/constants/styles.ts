@@ -203,7 +203,7 @@ export const cameraStyles = StyleSheet.create({
     padding: 25,
     ...baseShadow,
     shadowOpacity: 0.2,
-    shadowRadius: 4,
+    shadowRadius: 4, 
     elevation: 5,
   },
   translationContent: {

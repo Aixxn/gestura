@@ -38,6 +38,7 @@ export default function CameraComponent() {
   const isProcessingQueue = useRef(false);
   const isStopping = useRef(false);
   const MAX_QUEUE_SIZE = 80;
+  const CONCURRENT_UPLOADS = 5; // Process 5 frames in parallel for better throughput
 
   // HTTP API integration (for sending frames)
   const { 
@@ -71,7 +72,7 @@ export default function CameraComponent() {
     }
   }, [translation]);
 
-  // Frame queue processor - continuously sends frames from queue
+  // Frame queue processor - continuously sends frames from queue in parallel
   const processFrameQueue = useCallback(async () => {
     if (isProcessingQueue.current || frameQueue.current.length === 0) {
       return;
@@ -80,21 +81,31 @@ export default function CameraComponent() {
     isProcessingQueue.current = true;
 
     while (frameQueue.current.length > 0) {
-      const frame = frameQueue.current.shift();
+      // Take up to CONCURRENT_UPLOADS frames from queue for parallel processing
+      const batch = frameQueue.current.splice(0, CONCURRENT_UPLOADS);
       
-      if (!frame) break;
+      if (batch.length === 0) break;
 
-      try {
-        console.log(`Processing queued frame: ${frame.id} (${frameQueue.current.length} remaining in queue)`);
-        await sendFrame(frame.path);
-        console.log(`Frame ${frame.id} sent successfully`);
-      } catch (error) {
-        console.error(`Failed to send frame ${frame.id}:`, error);
-        // Continue processing even if one frame fails
-      }
+      console.log(`Processing batch of ${batch.length} frames in parallel (${frameQueue.current.length} remaining in queue)`);
 
-      // Small delay to prevent overwhelming the backend
-      await new Promise(resolve => setTimeout(resolve, 50));
+      // Send all frames in the batch simultaneously
+      const results = await Promise.allSettled(
+        batch.map(async (frame) => {
+          try {
+            await sendFrame(frame.path);
+            console.log(`✓ Frame ${frame.id} sent successfully`);
+            return { success: true, frameId: frame.id };
+          } catch (error) {
+            console.error(`✗ Failed to send frame ${frame.id}:`, error);
+            return { success: false, frameId: frame.id, error };
+          }
+        })
+      );
+
+      // Log batch completion summary
+      const successful = results.filter(r => r.status === 'fulfilled' && r.value.success).length;
+      const failed = batch.length - successful;
+      console.log(`Batch complete: ${successful} successful, ${failed} failed`);
     }
 
     isProcessingQueue.current = false;
@@ -104,7 +115,7 @@ export default function CameraComponent() {
       console.log('All queued frames sent. Stop process complete.');
       isStopping.current = false;
     }
-  }, [sendFrame]);
+  }, [sendFrame, CONCURRENT_UPLOADS]);
 
   // Add frame to queue (max 80 frames)
   const addFrameToQueue = useCallback((frame: QueuedFrame) => {
