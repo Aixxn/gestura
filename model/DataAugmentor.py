@@ -5,20 +5,18 @@ import os
 
 class DataAugmentor:
     def __init__(self,
-                 jitter_std=0.005,          # Reduced: less noise for subtle gestures
-                 scale_range=(0.95, 1.05),   # Tighter scale
-                 rotation_range=(-8, 8),     # Smaller rotation (front-facing camera)
-                 translation_range=(-0.05, 0.05),  # Smaller translation
-                 drop_frame_prob=0.05,       # Mild frame dropping
-                 mirror_prob=0.5,
-                 crop_min_frames=24):        # Adjust based on your typical sequence length
+                 jitter_std=0.004,          # slight noise
+                 scale_range=(0.93, 1.07),  # mild scale
+                 rotation_range=(-7, 7),    # subtle rotation
+                 translation_range=(-0.05, 0.05),  # small spatial shift
+                 mirror_prob=0.5):          # optional mirror flip
         self.jitter_std = jitter_std
         self.scale_range = scale_range
         self.rotation_range = rotation_range
         self.translation_range = translation_range
-        self.drop_frame_prob = drop_frame_prob
+        #self.drop_frame_prob = drop_frame_prob
         self.mirror_prob = mirror_prob
-        self.crop_min_frames = crop_min_frames
+        #self.crop_min_frames = crop_min_frames
 
     def augment(self, sequence):
         """
@@ -31,8 +29,8 @@ class DataAugmentor:
         sequence = self._rotate(sequence)
         sequence = self._translate(sequence)
         sequence = self._maybe_mirror(sequence)
-        sequence = self._maybe_crop(sequence)
-        sequence = self._maybe_drop_frames(sequence)
+        #sequence = self._maybe_crop(sequence)
+        #sequence = self._maybe_drop_frames(sequence)
         return sequence
 
     def _jitter(self, seq):
@@ -68,12 +66,12 @@ class DataAugmentor:
             seq[:, :, 0] *= -1  # flip x-axis
         return seq
 
-    def _maybe_crop(self, seq):
+""" def _maybe_crop(self, seq):
         if len(seq) <= self.crop_min_frames:
             return seq
         max_start = len(seq) - self.crop_min_frames
         start = random.randint(0, max_start)
-        return seq[start:start + self.crop_min_frames]
+        return seq[start:start + self.crop_min_frames] 
 
     def _maybe_drop_frames(self, seq):
         if self.drop_frame_prob <= 0 or len(seq) <= 1:
@@ -81,13 +79,13 @@ class DataAugmentor:
         keep = [i for i in range(len(seq)) if random.random() > self.drop_frame_prob]
         if not keep:
             keep = [random.randint(0, len(seq) - 1)]
-        return seq[keep]
+        return seq[keep]"""
 
 
 if __name__ == "__main__":
-    INPUT_ROOT = r"C:\Users\yus\Desktop\gestura\model\keypoint_data_normalized"
-    OUTPUT_ROOT = r"C:\Users\yus\Desktop\gestura\model\keypoint_data_augmented"
-    NUM_AUG_PER_FILE = 3  # Generate  n augmented versions per file
+    INPUT_ROOT = r"C:\Users\yus\Desktop\repo\gestura\model\keypoint_data_normalized"
+    OUTPUT_ROOT = r"C:\Users\yus\Desktop\repo\gestura\model\keypoint_data_augmented"
+    NUM_AUG_PER_FILE = 9  # Generate  n augmented versions per file
     COPY_ORIGINAL = True  # Also copy original (non-augmented) files
 
     os.makedirs(OUTPUT_ROOT, exist_ok=True)
