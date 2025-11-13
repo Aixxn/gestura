@@ -4,6 +4,7 @@ import { Image, ImageBackground, Text, TouchableOpacity, View} from 'react-nativ
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { cameraStyles } from '../../constants/styles';
 import * as Speech from 'expo-speech';
+import * as Haptics from 'expo-haptics';
 import { useGesturaAPI } from '../../hooks/useGesturaAPI';
 import { useGesturaWebSocket } from '../../hooks/useGesturaWebSocket';
 
@@ -38,6 +39,7 @@ export default function CameraComponent() {
   const isProcessingQueue = useRef(false);
   const isStopping = useRef(false);
   const MAX_QUEUE_SIZE = 80;
+  const CONCURRENT_UPLOADS = 5; // Process 5 frames in parallel for better throughput
 
   // HTTP API integration (for sending frames)
   const { 
@@ -48,21 +50,31 @@ export default function CameraComponent() {
   } = useGesturaAPI();
 
   // WebSocket integration (for receiving translations)
+  // Connection is persistent - only connects when UUID is ready, stays connected throughout
   const {
     translation,
     isConnected,
     isConnecting,
     error: wsError,
-    connect: connectWebSocket,
-    disconnect: disconnectWebSocket,
     clearTranslation,
   } = useGesturaWebSocket({
     uuid: sessionUUID,
-    enabled: true, // Keep WebSocket always connected
+    enabled: !!sessionUUID, // Only connect when UUID is ready, then stay connected
     autoReconnect: true,
     reconnectInterval: 3000,
     maxReconnectAttempts: 5,
   });
+
+  // Monitor WebSocket connection status
+  useEffect(() => {
+    if (isConnected) {
+      console.log('WebSocket connected successfully with UUID:', sessionUUID);
+    } else if (isConnecting) {
+      console.log('WebSocket connecting...');
+    } else {
+      console.log('WebSocket disconnected');
+    }
+  }, [isConnected, isConnecting, sessionUUID]);
 
   // Update translation text when received from WebSocket
   useEffect(() => {
@@ -71,7 +83,18 @@ export default function CameraComponent() {
     }
   }, [translation]);
 
-  // Frame queue processor - continuously sends frames from queue
+  // Provide haptic feedback for connection status changes
+  useEffect(() => {
+    if (isConnected && isActive) {
+      // Connection established during active session
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    } else if (!isConnected && isActive && !isConnecting) {
+      // Connection lost during active session
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+    }
+  }, [isConnected, isActive, isConnecting]);
+
+  // Frame queue processor - continuously sends frames from queue in parallel
   const processFrameQueue = useCallback(async () => {
     if (isProcessingQueue.current || frameQueue.current.length === 0) {
       return;
@@ -80,21 +103,31 @@ export default function CameraComponent() {
     isProcessingQueue.current = true;
 
     while (frameQueue.current.length > 0) {
-      const frame = frameQueue.current.shift();
+      // Take up to CONCURRENT_UPLOADS frames from queue for parallel processing
+      const batch = frameQueue.current.splice(0, CONCURRENT_UPLOADS);
       
-      if (!frame) break;
+      if (batch.length === 0) break;
 
-      try {
-        console.log(`Processing queued frame: ${frame.id} (${frameQueue.current.length} remaining in queue)`);
-        await sendFrame(frame.path);
-        console.log(`Frame ${frame.id} sent successfully`);
-      } catch (error) {
-        console.error(`Failed to send frame ${frame.id}:`, error);
-        // Continue processing even if one frame fails
-      }
+      console.log(`Processing batch of ${batch.length} frames in parallel (${frameQueue.current.length} remaining in queue)`);
 
-      // Small delay to prevent overwhelming the backend
-      await new Promise(resolve => setTimeout(resolve, 50));
+      // Send all frames in the batch simultaneously
+      const results = await Promise.allSettled(
+        batch.map(async (frame) => {
+          try {
+            await sendFrame(frame.path);
+            console.log(`✓ Frame ${frame.id} sent successfully`);
+            return { success: true, frameId: frame.id };
+          } catch (error) {
+            console.error(`✗ Failed to send frame ${frame.id}:`, error);
+            return { success: false, frameId: frame.id, error };
+          }
+        })
+      );
+
+      // Log batch completion summary
+      const successful = results.filter(r => r.status === 'fulfilled' && r.value.success).length;
+      const failed = batch.length - successful;
+      console.log(`Batch complete: ${successful} successful, ${failed} failed`);
     }
 
     isProcessingQueue.current = false;
@@ -104,7 +137,7 @@ export default function CameraComponent() {
       console.log('All queued frames sent. Stop process complete.');
       isStopping.current = false;
     }
-  }, [sendFrame]);
+  }, [sendFrame, CONCURRENT_UPLOADS]);
 
   // Add frame to queue (max 80 frames)
   const addFrameToQueue = useCallback((frame: QueuedFrame) => {
@@ -188,9 +221,28 @@ export default function CameraComponent() {
 
   if (!hasPermission) {
     return (
-      <View style={cameraStyles.permissionContainer}>
-        <Text style={cameraStyles.permissionMessage}>We need your permission to show the camera</Text>
-        <TouchableOpacity style={cameraStyles.permissionButton} onPress={requestPermission}>
+      <View 
+        style={cameraStyles.permissionContainer}
+        accessible={true}
+        accessibilityRole="alert"
+        accessibilityLabel="Camera permission required to use Gestura sign language translator"
+      >
+        <Text 
+          style={cameraStyles.permissionMessage}
+          accessible={true}
+          accessibilityRole="header"
+        >
+          We need your permission to show the camera
+        </Text>
+        <TouchableOpacity 
+          style={cameraStyles.permissionButton} 
+          onPress={requestPermission}
+          accessible={true}
+          accessibilityRole="button"
+          accessibilityLabel="Grant camera permission"
+          accessibilityHint="Activates to open camera settings and allow camera access"
+          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+        >
           <Text style={cameraStyles.permissionButtonText}>Grant Permission</Text>
         </TouchableOpacity>
       </View>
@@ -199,7 +251,13 @@ export default function CameraComponent() {
 
   if (!device) {
     return (
-      <View style={cameraStyles.loadingContainer}>
+      <View 
+        style={cameraStyles.loadingContainer}
+        accessible={true}
+        accessibilityRole="progressbar"
+        accessibilityLabel="Loading camera"
+        accessibilityHint="Please wait while the camera initializes"
+      >
         <Text style={cameraStyles.permissionMessage}>Loading camera...</Text>
       </View>
     );
@@ -207,9 +265,31 @@ export default function CameraComponent() {
 
   if (cameraError) {
     return (
-      <View style={cameraStyles.permissionContainer}>
-        <Text style={cameraStyles.permissionMessage}>Camera Error: {cameraError}</Text>
-        <TouchableOpacity style={cameraStyles.permissionButton} onPress={() => setCameraError(null)}>
+      <View 
+        style={cameraStyles.permissionContainer}
+        accessible={true}
+        accessibilityRole="alert"
+        accessibilityLabel={`Camera error: ${cameraError}`}
+      >
+        <Text 
+          style={cameraStyles.permissionMessage}
+          accessible={true}
+          accessibilityRole="text"
+        >
+          Camera Error: {cameraError}
+        </Text>
+        <TouchableOpacity 
+          style={cameraStyles.permissionButton} 
+          onPress={() => {
+            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+            setCameraError(null);
+          }}
+          accessible={true}
+          accessibilityRole="button"
+          accessibilityLabel="Retry camera initialization"
+          accessibilityHint="Activates to attempt reconnecting to camera"
+          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+        >
           <Text style={cameraStyles.permissionButtonText}>Retry</Text>
         </TouchableOpacity>
       </View>
@@ -218,6 +298,14 @@ export default function CameraComponent() {
 
   const handleTapToStart = async () => {
     const newActiveState = !isActive;
+    
+    // Provide haptic feedback based on action
+    if (newActiveState) {
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    } else {
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+    }
+    
     setIsActive(newActiveState);
     console.log('Sign language detection active:', newActiveState);
     
@@ -314,21 +402,41 @@ export default function CameraComponent() {
         
         <View style={cameraStyles.topOverlay}>
           <Text style={cameraStyles.statusText}>Gestura</Text>
-          <TouchableOpacity style={cameraStyles.cameraFlipButton} onPress={toggleCameraFacing}>
+          <TouchableOpacity 
+            style={cameraStyles.cameraFlipButton} 
+            onPress={() => {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              toggleCameraFacing();
+            }}
+            accessible={true}
+            accessibilityRole="button"
+            accessibilityLabel={`Switch to ${isFrontCamera ? 'back' : 'front'} camera`}
+            accessibilityHint="Activates to flip camera view"
+            hitSlop={{ top: 15, bottom: 15, left: 15, right: 15 }}
+          >
             <Image
               source={require('../../images/camera.png')}
               style={cameraStyles.cameraFlipIcon}
               resizeMode="contain"
+              accessibilityIgnoresInvertColors={true}
             />
           </TouchableOpacity>
         </View>
 
         {/* Frame Processing Status Display */}
         {isActive && (
-          <View style={[
-            cameraStyles.statusDisplayContainer,
-            isConnected ? cameraStyles.statusDisplayConnected : cameraStyles.statusDisplayDisconnected
-          ]}>
+          <View 
+            style={[
+              cameraStyles.statusDisplayContainer,
+              isConnected ? cameraStyles.statusDisplayConnected : cameraStyles.statusDisplayDisconnected
+            ]}
+            accessible={true}
+            accessibilityRole="text"
+            accessibilityLabel={`Connection status: ${
+              isConnected ? 'Connected' : isConnecting ? 'Connecting' : 'Disconnected'
+            }. Captured ${frameCount.current} frames. Queue size ${frameQueue.current.length} of ${MAX_QUEUE_SIZE}`}
+            accessibilityLiveRegion="polite"
+          >
             <Text style={cameraStyles.statusDisplayTitle}>
               {isConnected ? 'CONNECTED' : isConnecting ? 'CONNECTING' : 'DISCONNECTED'} - Frames: {frameCount.current}
             </Text>
@@ -354,23 +462,55 @@ export default function CameraComponent() {
             )}
           </View>
         )}
-        <View style={cameraStyles.translationContainer}>
-          <View style={cameraStyles.translationContent}>
+        <View 
+          style={cameraStyles.translationContainer}
+          accessible={true}
+          accessibilityRole="text"
+          accessibilityLabel="Translation result"
+        >
+          <View 
+            style={cameraStyles.translationContent}
+            accessible={true}
+            accessibilityLiveRegion="assertive"
+            accessibilityLabel={translation || "Waiting for translation"}
+          >
             {translation ? (
-              <Text style={cameraStyles.translationText}>{translation}</Text>
+              <Text 
+                style={cameraStyles.translationText}
+                accessible={true}
+                accessibilityRole="text"
+              >
+                {translation}
+              </Text>
             ) : (
-              <Text style={cameraStyles.placeholderText}>Your Translation will appear here...</Text>
+              <Text 
+                style={cameraStyles.placeholderText}
+                accessible={true}
+                accessibilityRole="text"
+              >
+                Your Translation will appear here...
+              </Text>
             )}
           </View>
           
           <TouchableOpacity 
             style={[cameraStyles.audioButton, isPlaying && cameraStyles.audioButtonActive]} 
             onPress={handleTextToSpeech}
+            accessible={true}
+            accessibilityRole="button"
+            accessibilityLabel={isPlaying ? "Stop speech" : "Speak translation"}
+            accessibilityHint={isPlaying ? "Stops the current speech" : "Reads the translation aloud"}
+            accessibilityState={{ 
+              selected: isPlaying,
+              busy: isPlaying 
+            }}
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
           >
             <Image
               source={require('../../images/volume.png')}
               style={{ width: 20, height: 20, tintColor: isPlaying ? 'white' : '#000000ff' }}
               resizeMode="contain"
+              accessibilityIgnoresInvertColors={true}
             />
           </TouchableOpacity>
         </View>
@@ -379,22 +519,45 @@ export default function CameraComponent() {
           <TouchableOpacity 
             style={cameraStyles.actionButton} 
             onPress={handleTranslatePress}
+            accessible={true}
+            accessibilityRole="button"
+            accessibilityLabel="Translation options"
+            accessibilityHint="Opens translation settings and options"
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
           >
             <Image
               source={require('../../images/translate.png')}
               style={cameraStyles.actionButtonImage}
               resizeMode="contain"
+              accessibilityIgnoresInvertColors={true}
             />
           </TouchableOpacity>
 
           <TouchableOpacity 
             style={cameraStyles.tapToStartButton} 
-            onPress={handleTapToStart}
+            onPress={async () => {
+              await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+              handleTapToStart();
+            }}
+            accessible={true}
+            accessibilityRole="button"
+            accessibilityLabel={isActive ? "Stop translation" : "Start translation"}
+            accessibilityHint={
+              isActive 
+                ? "Stops capturing sign language and processes remaining frames" 
+                : "Starts capturing sign language from camera"
+            }
+            accessibilityState={{ 
+              disabled: false,
+              busy: isStopping.current 
+            }}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
           >
             <Image
               source={require('../../images/taptostart.png')}
               style={cameraStyles.tapToStartIcon}
               resizeMode="contain"
+              accessibilityIgnoresInvertColors={true}
             />
             <Text style={cameraStyles.tapToStartText}>
               {isActive ? 'Tap to Stop' : 'Tap to Start'}

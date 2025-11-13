@@ -113,7 +113,7 @@ class Converter:
 
         pose = np.array([[res.x, res.y, res.z, res.visibility] for res in results
                          .pose_landmarks
-                         .landmark]).flatten() if results.pose_landmarks else np.zeros(132)
+                         .landmark]).flatten() if results.pose_landmarks else np.zeros(33*4)
 
         # puts all data into one array
         a = np.concatenate([face, lh, rh, pose])
@@ -128,6 +128,18 @@ class Converter:
         return lm_list
 
     def stop(self):
+        frame_list = list(self.frame_buffer)
+            frame_count = len(frame_list)
+            frame_np = np.stack(frame_list, axis=0)
+
+            # pad 
+            pad_len = window_size - frame_count
+            pad = np.zeros((pad_len, feature_dim), dtype=np.float32)
+            frames_np = np.vstack([frames_np, pad])
+
+            # Final shape will always be (WINDOW_SIZE, 1662)
+            print('FINAL FRAME SHAPE:', frames_np.shape)
+            return frames_np
         pred_list = list(self.pred_history)
         window = pred_list[-min(len(pred_list), WINDOW_SIZE):]
         smoothed_pred = np.mean(window, axis=0)
