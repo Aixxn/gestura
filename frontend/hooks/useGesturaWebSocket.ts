@@ -84,8 +84,33 @@ export const useGesturaWebSocket = ({
       };
 
       ws.onmessage = (event) => {
-        console.log('WebSocket: Translation received:', event.data);
-        setTranslation(event.data);
+        // Expecting a JSON-stringified payload like: { uuid: "...", sentence: "..." }
+        try {
+          const raw = event.data;
+          const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+          console.log('WebSocket: Raw message received:', parsed);
+
+          // Ensure payload has expected shape and the uuid matches (if provided)
+          const payloadUuid = parsed?.uuid;
+          const sentence = parsed?.sentence ?? parsed?.translation ?? parsed?.text;
+
+          // If a uuid is supplied in the payload and it doesn't match, ignore the message
+          if (payloadUuid && payloadUuid !== uuid) {
+            console.log('WebSocket: Ignoring message for different UUID:', payloadUuid);
+            return;
+          }
+
+          // Skip null/empty sentences
+          if (!sentence || sentence === 'null') {
+            console.log('WebSocket: Received empty/null sentence — skipping');
+            return;
+          }
+
+          // All good — update translation string (ensure string type)
+          setTranslation(String(sentence));
+        } catch (err) {
+          console.error('WebSocket: Failed to parse incoming message:', err, event.data);
+        }
       };
 
       ws.onerror = (error) => {
