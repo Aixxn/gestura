@@ -76,10 +76,31 @@ export default function CameraComponent() {
     }
   }, [isConnected, isConnecting, sessionUUID]);
 
-  // Update translation text when received from WebSocket
+  // Update translation text when received from WebSocket and auto-speak
   useEffect(() => {
     if (translation) {
       console.log('Translation received:', translation);
+      
+      // Automatically speak new translation
+      (async () => {
+        try {
+          await Speech.stop(); // Stop any existing speech
+          Speech.speak(translation, {
+            language: 'en-US',
+            pitch: 1.0,
+            rate: 0.9,
+            onDone: () => {
+              console.log('Auto-TTS finished speaking:', translation);
+            },
+            onError: (error) => {
+              console.error('Auto-TTS error:', error);
+            },
+          });
+          console.log('Auto-TTS started speaking:', translation);
+        } catch (error) {
+          console.error('Failed to start auto-TTS:', error);
+        }
+      })();
     }
   }, [translation]);
 
