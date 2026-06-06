@@ -58,6 +58,12 @@ class Converter:
         self._debug_image = None
         self._last_result = None
 
+        # Corrected hand references (set by _extract_keypoints after
+        # handedness fix). Initialised here for draw_landmarks safety.
+        self._corrected_face = None
+        self._corrected_lh = None
+        self._corrected_rh = None
+
         # Drawing persistence cache — stores normalized (x, y) coordinates
         # for each landmark group so draw_landmarks() always has something
         # to render, even when MediaPipe briefly loses detection.
@@ -139,17 +145,19 @@ class Converter:
         Uses cached coordinates when MediaPipe briefly loses a landmark
         group, so the overlay stays stable instead of flickering.
         """
-        if self._last_result is None:
+        if not hasattr(self, '_corrected_face') or self._corrected_face is None:
             return
         h, w = frame.shape[:2]
-        result = self._last_result
 
         def _to_px(nx: float, ny: float) -> tuple[int, int]:
             return int(nx * w), int(ny * h)
 
+        # Uses corrected references from _fix_handedness (runs in
+        # _extract_keypoints) so hand labels are not swapped.
+
         # --- Face landmarks (drawn as small dots) ---
-        if result.face_landmarks:
-            self._draw_face = [(lm.x, lm.y) for lm in result.face_landmarks]
+        if self._corrected_face:
+            self._draw_face = [(lm.x, lm.y) for lm in self._corrected_face]
         for nx, ny in self._draw_face:
             cv.circle(frame, _to_px(nx, ny), 1, (200, 200, 100), -1)
 
@@ -158,8 +166,8 @@ class Converter:
         hand_conn = [(i, i + 1) for i in range(20)]
 
         # --- Left hand landmarks ---
-        if result.left_hand_landmarks:
-            self._draw_lh = [(lm.x, lm.y) for lm in result.left_hand_landmarks]
+        if self._corrected_lh:
+            self._draw_lh = [(lm.x, lm.y) for lm in self._corrected_lh]
         if self._draw_lh:
             pts = [_to_px(nx, ny) for nx, ny in self._draw_lh]
             for a, b in hand_conn:
@@ -168,8 +176,8 @@ class Converter:
                 cv.circle(frame, pt, 4, (255, 50, 150), -1)
 
         # --- Right hand landmarks ---
-        if result.right_hand_landmarks:
-            self._draw_rh = [(lm.x, lm.y) for lm in result.right_hand_landmarks]
+        if self._corrected_rh:
+            self._draw_rh = [(lm.x, lm.y) for lm in self._corrected_rh]
         if self._draw_rh:
             pts = [_to_px(nx, ny) for nx, ny in self._draw_rh]
             for a, b in hand_conn:
@@ -180,6 +188,34 @@ class Converter:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    def _fix_handedness(self, result):
+        """Correct MediaPipe left/right hand label swaps when only one hand is visible.
+
+        MediaPipe Holistic sometimes mislabels a hand when only one is in frame
+        (e.g. the right hand is detected but labeled as "left"). This method
+        checks wrist position relative to the face center and swaps if needed.
+
+        Returns
+        -------
+        (left_hand_data, right_hand_data)
+            Corrected landmark references (or None for the missing hand).
+        """
+        left = result.left_hand_landmarks
+        right = result.right_hand_landmarks
+
+        if result.face_landmarks and (left is None) != (right is None):
+            face_cx = float(np.mean([lm.x for lm in result.face_landmarks]))
+            if left is not None:
+                if left[0].x > face_cx:   # labeled "left" but on right side
+                    right = left
+                    left = None
+            elif right is not None:
+                if right[0].x < face_cx:  # labeled "right" but on left side
+                    left = right
+                    right = None
+
+        return left, right
 
     def _extract_keypoints(self, result) -> np.ndarray:
         """Flatten MediaPipe Holistic landmarks into a single vector.
@@ -193,6 +229,14 @@ class Converter:
         # 468 (= 1662 total). Truncate to maintain compatibility.
         MAX_FACE = 468
         FACE_DIM = MAX_FACE * 3  # 1404
+
+        # Correct handedness before extraction
+        lh_data, rh_data = self._fix_handedness(result)
+
+        # Store corrected references for draw_landmarks
+        self._corrected_face = result.face_landmarks
+        self._corrected_lh = lh_data
+        self._corrected_rh = rh_data
 
         # --- Face landmarks ---
         face = np.zeros(FACE_DIM, dtype=np.float32)
@@ -209,8 +253,8 @@ class Converter:
         # --- Left hand landmarks (21 × 3 = 63) ---
         # Most prone to flicker — persistence is critical here.
         lh = np.zeros(21 * 3, dtype=np.float32)
-        if result.left_hand_landmarks:
-            for i, lm in enumerate(result.left_hand_landmarks):
+        if lh_data:
+            for i, lm in enumerate(lh_data):
                 idx = i * 3
                 lh[idx] = lm.x
                 lh[idx + 1] = lm.y
@@ -221,8 +265,8 @@ class Converter:
 
         # --- Right hand landmarks (21 × 3 = 63) ---
         rh = np.zeros(21 * 3, dtype=np.float32)
-        if result.right_hand_landmarks:
-            for i, lm in enumerate(result.right_hand_landmarks):
+        if rh_data:
+            for i, lm in enumerate(rh_data):
                 idx = i * 3
                 rh[idx] = lm.x
                 rh[idx + 1] = lm.y
