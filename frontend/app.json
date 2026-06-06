@@ -13,7 +13,8 @@
       "wsUrl": "ws://YOUR_SERVER_IP:9898"
     },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.anonymous.gestura"
     },
     "android": {
       "adaptiveIcon": {

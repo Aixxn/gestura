@@ -12,8 +12,8 @@ const Gestura = () => {
     if (currentScreen < 3) {
       setCurrentScreen(currentScreen + 1);
     } else {
-      // Navigate to camera on final screen
-      router.push('/(tabs)/camera');
+      // Navigate to login on final screen
+      router.push('/(tabs)/login');
     }
   };
 
@@ -57,14 +57,15 @@ const Gestura = () => {
   const screenData = getScreenData();
 
   return (
-    <SafeAreaView style={{ flex: 1 }}>
+    <View style={{ flex: 1 }}>
       <ImageBackground 
         source={screenData.backgroundImage}
         style={styles.backgroundImage}
         resizeMode="cover"
       >
-      <View style={styles.overlay}>
-        <View style={styles.container}>
+        <SafeAreaView style={{ flex: 1 }}>
+          <View style={styles.overlay}>
+            <View style={styles.container}>
 
           <View style={styles.content}>
             {/* --- Welcome Text with Gradient Background --- */}
@@ -91,11 +92,11 @@ const Gestura = () => {
               <Text style={styles.primaryButtonText}>{screenData.buttonText}</Text>
             </TouchableOpacity>
           </View>
-        </View>
-      </View>
-    </ImageBackground>
-    </SafeAreaView>
+            </View>
+          </View>
+        </SafeAreaView>
+      </ImageBackground>
+    </View>
   );
 };
 export default Gestura;
-

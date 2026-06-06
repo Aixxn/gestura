@@ -36,7 +36,7 @@ class MotionDetector:
                  history_size: int = 30,
                  feature_dim: int = 1662,
                  motion_smoothing: float = 0.6,
-                 stillness_floor: float = 0.08):
+                 stillness_floor: float = 0.3):
         """
         Parameters
         ----------
@@ -123,8 +123,8 @@ class MotionDetector:
             low_th = adaptive_base * self.low_factor
             high_th = adaptive_base * self.high_factor
         else:
-            low_th = 0.02
-            high_th = 0.08
+            low_th = 0.1
+            high_th = 0.4
 
         # Use smoothed motion for hysteresis decisions
         motion = self.smoothed_motion
@@ -136,7 +136,10 @@ class MotionDetector:
         elif motion < low_th:
             self.still_counter += 1
         elif motion > high_th:
-            self.still_counter = 0
+            # During the fallback period (<10 frames) the thresholds are
+            # speculative — don't let noise reset the counter.
+            if len(self.raw_motion_history) >= 10:
+                self.still_counter = 0
         # hysteresis band: hold previous still_counter
 
         # --- accumulate ---
