@@ -54,6 +54,10 @@ class _MockConverter:
     def stop(self) -> np.ndarray:
         return self.window
 
+    def get_persisted_keypoints(self) -> np.ndarray:
+        """Return the same dummy vector as point_detection."""
+        return np.zeros(1662, dtype=np.float32)
+
 
 _mock_converter_module.Converter = _MockConverter
 

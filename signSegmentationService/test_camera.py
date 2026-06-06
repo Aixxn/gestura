@@ -291,12 +291,13 @@ def main() -> None:
                 continue
             image_bytes = jpg_buf.tobytes()
 
-            # Run MediaPipe
+            # Run MediaPipe (returns raw keypoints — zeros for undetected hands)
             keypoints = converter.point_detection(image_bytes)
             _ = converter.process_new_frame(keypoints)
 
-            # Run motion detection
-            sign_ended, completed = detector.update(keypoints)
+            # Run motion detection (use persisted keypoints — no zero-to-real spikes)
+            persisted = converter.get_persisted_keypoints()
+            sign_ended, completed = detector.update(persisted, keypoints)
 
         except Exception as e:
             print(f"[ERROR] {e}")

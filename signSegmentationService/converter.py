@@ -80,6 +80,14 @@ class Converter:
         self._last_rh = np.zeros(21 * 3, dtype=np.float32)
         self._last_pose = np.zeros(33 * 4, dtype=np.float32)
 
+        # Persisted keypoint vector (built by point_detection for the
+        # motion detector — uses last-known hand positions to avoid spikes).
+        self._persisted_kp = np.zeros(FEATURE_DIM, dtype=np.float32)
+
+        # Unnormalized raw components from the most recent frame; used by
+        # _build_persisted_kp() to reconstruct a motion-stable vector.
+        self._raw_components: tuple[np.ndarray, ...] | None = None
+
     def __del__(self):
         if hasattr(self, 'landmarker'):
             self.landmarker.close()
@@ -92,9 +100,11 @@ class Converter:
         """
         Decode raw image bytes and run MediaPipe Holistic.
 
-        Returns
-        -------
-        keypoints : np.ndarray, shape (FEATURE_DIM,)
+        Returns **raw** keypoints (zeros for undetected hand groups) — these
+        match the training data distribution of the ML model.
+
+        Use :meth:`get_persisted_keypoints` to obtain a motion-stable version
+        for the motion detector (last-known positions fill in for flicker).
         """
         nparr = np.frombuffer(image_bytes, np.uint8)
         cv_image = cv.imdecode(nparr, cv.IMREAD_COLOR)
@@ -106,17 +116,31 @@ class Converter:
 
         detection_result = self.landmarker.detect(mp_image)
         self._last_result = detection_result
-        keypoints = self._extract_keypoints(detection_result)
+        raw_kp = self._extract_keypoints(detection_result)
+
+        # Build persisted version for motion detector (swap in last-known
+        # hand positions so detection flicker doesn't spike the motion signal).
+        self._persisted_kp = self._build_persisted_kp()
 
         self._debug_image = cv.cvtColor(image_rgb, cv.COLOR_RGB2BGR)
 
-        if keypoints.shape != (FEATURE_DIM,):
+        if raw_kp.shape != (FEATURE_DIM,):
             raise ValueError(
-                f"MediaPipe returned {keypoints.shape[0]}-dim keypoints, "
+                f"MediaPipe returned {raw_kp.shape[0]}-dim keypoints, "
                 f"expected {FEATURE_DIM}. Check FEATURE_DIM env var."
             )
 
-        return keypoints
+        return raw_kp
+
+    def get_persisted_keypoints(self) -> np.ndarray:
+        """Return the motion-stable keypoint vector for the current frame.
+
+        This uses last-known hand positions when MediaPipe briefly loses
+        detection, so the motion detector sees smooth transitions instead
+        of zero-to-real spikes.  **Not** suitable for the ML model — the
+        model was trained on zeros for missing hands.
+        """
+        return self._persisted_kp
 
     def process_new_frame(self, frame_vector: np.ndarray) -> np.ndarray:
         """
@@ -218,15 +242,13 @@ class Converter:
         return left, right
 
     def _extract_keypoints(self, result) -> np.ndarray:
-        """Flatten MediaPipe Holistic landmarks into a single vector.
+        """Extract **raw** keypoints — zeros for undetected landmark groups.
 
-        When a landmark group (e.g. left hand) is not detected in the current
-        frame, the **last known** keypoints are reused instead of zeros.
-        This prevents huge motion spikes from detection flicker.
+        This matches the ML model's training distribution (missing hands = 0).
+        The landmark persistence cache is still *updated* here, but the
+        returned vector does NOT use it — callers that need motion-stable
+        keypoints should use :meth:`get_persisted_keypoints` instead.
         """
-        # The new holistic landmarker model returns 478 face landmarks,
-        # but the existing pipeline (ML model, translation service) expects
-        # 468 (= 1662 total). Truncate to maintain compatibility.
         MAX_FACE = 468
         FACE_DIM = MAX_FACE * 3  # 1404
 
@@ -247,11 +269,9 @@ class Converter:
                 face[idx + 1] = lm.y
                 face[idx + 2] = lm.z
             self._last_face = face.copy()
-        else:
-            face = self._last_face.copy()
+        # else: stays zeros (raw — matches training data)
 
         # --- Left hand landmarks (21 × 3 = 63) ---
-        # Most prone to flicker — persistence is critical here.
         lh = np.zeros(21 * 3, dtype=np.float32)
         if lh_data:
             for i, lm in enumerate(lh_data):
@@ -260,8 +280,7 @@ class Converter:
                 lh[idx + 1] = lm.y
                 lh[idx + 2] = lm.z
             self._last_lh = lh.copy()
-        else:
-            lh = self._last_lh.copy()
+        # else: stays zeros (raw — matches training data)
 
         # --- Right hand landmarks (21 × 3 = 63) ---
         rh = np.zeros(21 * 3, dtype=np.float32)
@@ -272,8 +291,7 @@ class Converter:
                 rh[idx + 1] = lm.y
                 rh[idx + 2] = lm.z
             self._last_rh = rh.copy()
-        else:
-            rh = self._last_rh.copy()
+        # else: stays zeros (raw — matches training data)
 
         # --- Pose landmarks (33 × 4 = 132; includes visibility) ---
         pose = np.zeros(33 * 4, dtype=np.float32)
@@ -285,10 +303,29 @@ class Converter:
                 pose[idx + 2] = lm.z
                 pose[idx + 3] = lm.visibility if hasattr(lm, 'visibility') else 0.0
             self._last_pose = pose.copy()
-        else:
-            pose = self._last_pose.copy()
+        # else: stays zeros
+
+        # Store unnormalised components so _build_persisted_kp can
+        # reconstruct a motion-stable version.
+        self._raw_components = (face, lh, rh, pose)
 
         concat = np.concatenate([face, lh, rh, pose])
 
         # Normalise by subtracting the first landmark (translation invariance)
+        return (concat - concat[0]).astype(np.float32)
+
+    def _build_persisted_kp(self) -> np.ndarray:
+        """Build a motion-stable keypoint vector using last-known hand positions.
+
+        The returned vector uses the current frame's face & pose (nearly always
+        detected) but substitutes **last-known** hand keypoints when MediaPipe
+        briefly loses a hand.  This is fed to the motion detector so that brief
+        detection flicker doesn't create zero-to-real motion spikes.
+        """
+        if self._raw_components is None:
+            return np.zeros(FEATURE_DIM, dtype=np.float32)
+
+        face, _, _, pose = self._raw_components
+        # Swap in cached hand keypoints (last-known positions)
+        concat = np.concatenate([face, self._last_lh, self._last_rh, pose])
         return (concat - concat[0]).astype(np.float32)
