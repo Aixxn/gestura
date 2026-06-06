@@ -227,6 +227,7 @@ def main() -> None:
         min_sign_duration=5,
         history_size=30,
         feature_dim=FEATURE_DIM,
+        smoothing_alpha=0.4,   # dampens MediaPipe frame-to-frame jitter
     )
 
     fps_meter = FPSMeter()
