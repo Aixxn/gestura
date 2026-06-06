@@ -223,8 +223,8 @@ def main() -> None:
     converter = Converter()
     detector = MotionDetector(
         low_factor=0.5,
-        high_factor=2.0,
-        still_frames_required=8,
+        high_factor=4.0,
+        still_frames_required=5,
         min_sign_duration=5,
         history_size=30,
         feature_dim=FEATURE_DIM,
