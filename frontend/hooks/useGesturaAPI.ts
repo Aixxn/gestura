@@ -37,8 +37,8 @@ export const useGesturaAPI = () => {
       return { success: true, data: response.data };
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to send frame';
-      console.error('API: Failed to send frame:', errorMessage);
-      setError(errorMessage);
+      // console.error('API: Failed to send frame:', errorMessage);
+      // setError(errorMessage);
       setIsSending(false);
       return { success: false, error: errorMessage };
     }

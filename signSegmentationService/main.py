@@ -29,7 +29,7 @@ motion_detector = MotionDetector(
     history_size=30,
     feature_dim=FEATURE_DIM,   # validated on every update()
     motion_smoothing=0.6,      # smooth motion signal to suppress jitter
-    stillness_floor=0.08,      # motion below this is always "still"
+    stillness_floor=0.3,       # motion below this is always "still"
 )
 
 # Per-session state (in production, replace with Redis)

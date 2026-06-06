@@ -79,9 +79,9 @@ except Exception as e:
     print(f"Error loading model: {e}")
     model = None # Handle this gracefully in a real app
 
-# Define the expected input shape
-WINDOW_SIZE = 80
-FEATURE_DIM = 1663
+# Define the expected input shape (configurable via .env to avoid mismatches)
+WINDOW_SIZE = int(os.getenv("WINDOW_SIZE", "80"))
+FEATURE_DIM = int(os.getenv("FEATURE_DIM", "1663"))
 NUM_CLASSES = model.output_shape[-1] if model else 30 # Adjust as needed
 
 # --- Pydantic Data Model ---
@@ -109,7 +109,7 @@ WORD_MAPPING = [f"word_{i}" for i in range(NUM_CLASSES)]
 @app.post("/translate")
 async def translate(data: WindowInput):
     """
-    Takes an (80, 1663) array of floats and returns a predicted word.
+    Takes a (WINDOW_SIZE, FEATURE_DIM) array of floats and returns a predicted word.
     """
     if model is None:
         return {"error": "Model not loaded"}, 500

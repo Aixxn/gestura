@@ -89,14 +89,29 @@ class TestMotionThresholds:
         detector.update(still_kp)
         assert detector.still_counter >= 1
 
-    def test_high_motion_resets_still_counter(self, detector, random_keypoints):
-        detector.update(random_keypoints)
-        still_kp = random_keypoints + 1e-6
-        detector.update(still_kp)
+    def test_high_motion_resets_still_counter(self, random_keypoints):
+        # Use high still_frames_required so the detector doesn't keep
+        # ending signs during the low-motion setup phase.
+        d = MotionDetector(
+            low_factor=0.5,
+            high_factor=2.0,
+            still_frames_required=30,  # high → no sign endings during setup
+            min_sign_duration=2,
+            history_size=10,
+            feature_dim=1662,
+            motion_smoothing=0.0,
+            stillness_floor=0.0,
+        )
+        # Seed enough frames to pass the fallback period (≥10 history entries)
+        d.update(random_keypoints)
+        for _ in range(12):
+            d.update(random_keypoints + 1e-6)
+        assert d.still_counter >= 1
 
+        # Now send very high motion — should reset the counter
         high_kp = random_keypoints + 10.0
-        detector.update(high_kp)
-        assert detector.still_counter == 0
+        d.update(high_kp)
+        assert d.still_counter == 0
 
     def test_hysteresis_band_holds_state(self, detector, random_keypoints):
         """
@@ -105,7 +120,7 @@ class TestMotionThresholds:
         """
         detector.update(random_keypoints)
         mid_kp = random_keypoints.copy()
-        mid_kp[0] += 0.05
+        mid_kp[0] += 0.2  # raw_motion = 0.2, within band [0.1, 0.4]
         before = detector.still_counter
         detector.update(mid_kp)
         assert detector.still_counter == before, \
@@ -279,7 +294,7 @@ class TestParameters:
         assert d.history_size == 30
         assert d.feature_dim == 1662
         assert d.motion_smoothing == 0.6
-        assert d.stillness_floor == 0.08
+        assert d.stillness_floor == 0.3
 
 
 # ===================================================================

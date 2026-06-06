@@ -229,7 +229,7 @@ def main() -> None:
         history_size=30,
         feature_dim=FEATURE_DIM,
         motion_smoothing=0.6,     # smooth motion signal to suppress jitter
-        stillness_floor=0.08,     # motion below this is always "still"
+        stillness_floor=0.3,      # motion below this is always "still"
     )
 
     fps_meter = FPSMeter()
