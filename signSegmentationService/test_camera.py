@@ -25,8 +25,13 @@ Visual indicators
       CYAN   → motion detector just reset
 
   ● Left panel shows:
-      sign count, current sign frame length, motion score,
-      adaptive low/high thresholds, still counter, FPS
+      total segment count (SEG #), current sign frame length,
+      motion score, adaptive low/high thresholds, still counter, FPS
+
+  ● Segment timeline bar at bottom:
+      each completed sign = colored block with its frame count
+      (helps you verify at a glance if the right number of segments
+      was detected)
 
   ● Keypoints overlaid on the camera feed (MediaPipe Holistic)
 """
@@ -72,6 +77,7 @@ def draw_info_panel(
     still_required: int,
     fps: float,
     status: str,
+    segment_log: list,
 ) -> None:
     """Draw a semi-transparent info panel on the left side."""
     h, w = frame.shape[:2]
@@ -86,8 +92,6 @@ def draw_info_panel(
         ("SIGN SEGMENTATION TEST", (255, 255, 255), 0.7),
         ("─" * 28, (180, 180, 180), 0.5),
         (f"Status          : {status}", (255, 255, 255), 0.55),
-        (f"Sign #{sign_count}", (100, 255, 100), 0.6),
-        (f"Sign length     : {sign_length} frames", (200, 200, 200), 0.5),
         (f"Motion score    : {motion:.4f}", (200, 200, 200), 0.5),
         (f"Low threshold   : {low_th:.4f}", (100, 200, 255), 0.5),
         (f"High threshold  : {high_th:.4f}", (100, 255, 200), 0.5),
@@ -95,7 +99,6 @@ def draw_info_panel(
         (f"FPS             : {fps:.1f}", (200, 200, 200), 0.5),
         (f"Frame size      : {w}x{h}", (150, 150, 150), 0.45),
         ("─" * 28, (180, 180, 180), 0.5),
-        ("Controls: [r]eset  [p]ause  [q]uit", (180, 180, 180), 0.45),
     ]
 
     y = 30
@@ -103,6 +106,50 @@ def draw_info_panel(
         cv.putText(frame, text, (15, y), cv.FONT_HERSHEY_SIMPLEX,
                    scale, color, 1, cv.LINE_AA)
         y += 26
+
+    # ---- segment count (large & prominent) ----
+    seg_text = f"SEGMENTS: {sign_count}"
+    (tw, _), _ = cv.getTextSize(seg_text, cv.FONT_HERSHEY_SIMPLEX, 0.65, 2)
+    cv.putText(frame, seg_text,
+               (panel_w - tw - 15, y - 8),  # right-aligned in panel
+               cv.FONT_HERSHEY_SIMPLEX, 0.65,
+               (100, 255, 100), 2, cv.LINE_AA)
+
+    # ---- mini segment timeline ----
+    if segment_log:
+        total_frames = sum(s["frames"] for s in segment_log) or 1
+        timeline_x = 15
+        timeline_y = y + 10
+        bar_h = 14
+        max_bar_w = panel_w - 30
+
+        cv.putText(frame, "Segments:", (timeline_x, timeline_y - 2),
+                   cv.FONT_HERSHEY_SIMPLEX, 0.4, (180, 180, 180), 1, cv.LINE_AA)
+        timeline_y += 4
+
+        for s in segment_log:
+            seg_w = max(int((s["frames"] / total_frames) * max_bar_w), 6)
+            # pick color by index
+            colors = [(100, 200, 255), (100, 255, 200),
+                      (255, 200, 100), (200, 100, 255),
+                      (255, 100, 200), (100, 255, 255)]
+            c = colors[s["idx"] % len(colors)]
+            cv.rectangle(frame,
+                         (timeline_x, timeline_y),
+                         (timeline_x + seg_w, timeline_y + bar_h),
+                         c, -1)
+            cv.rectangle(frame,
+                         (timeline_x, timeline_y),
+                         (timeline_x + seg_w, timeline_y + bar_h),
+                         (255, 255, 255), 1)
+            # frame count label inside bar
+            label = str(s["frames"])
+            (lw, lh), _ = cv.getTextSize(label, cv.FONT_HERSHEY_SIMPLEX, 0.35, 1)
+            if lw < seg_w - 4:
+                cv.putText(frame, label,
+                           (timeline_x + (seg_w - lw) // 2, timeline_y + bar_h - 3),
+                           cv.FONT_HERSHEY_SIMPLEX, 0.35, (255, 255, 255), 1, cv.LINE_AA)
+            timeline_x += seg_w + 2
 
 
 def draw_motion_meter(
@@ -183,6 +230,7 @@ def main() -> None:
 
     # ---- state ----
     sign_count = 0
+    segment_log: list[dict] = []  # track each completed segment
     paused = False
     frame_idx = 0
 
@@ -209,7 +257,8 @@ def main() -> None:
         elif key == ord('r'):
             detector.reset()
             sign_count = 0
-            print("  [RESET] Motion detector reset.")
+            segment_log.clear()
+            print("  [RESET] Motion detector and segment log cleared.")
             status_color = (255, 255, 0)  # CYAN flash
         elif key == ord('p'):
             paused = not paused
@@ -268,8 +317,19 @@ def main() -> None:
         if sign_ended and completed is not None:
             est_duration = len(completed) / current_fps if current_fps > 0 else 0
             sign_count += 1  # increment before printing
+            segment_log.append({
+                "idx": sign_count,
+                "frames": len(completed),
+                "duration": est_duration,
+            })
             status = "SIGN ENDED!"
             status_color = (50, 50, 255)  # RED
+
+            # Build a segment-summary string for console
+            seg_summary = " ".join(
+                f"[#{s['idx']}:{s['frames']}fr]"
+                for s in segment_log
+            )
             print()
             print(f"  ╔══════════════════════════════════════════╗")
             print(f"  ║       ★ SIGN #{sign_count} DETECTED ★        ║")
@@ -277,6 +337,9 @@ def main() -> None:
             print(f"  ║  Frames       : {len(completed):>4}                      ║")
             print(f"  ║  Duration     : {est_duration:>6.2f}s (est)             ║")
             print(f"  ║  Keypoints    : {completed[0].shape[0]} dims per frame    ║")
+            print(f"  ╠══════════════════════════════════════════╣")
+            print(f"  ║  SEGMENTS: {sign_count} total")
+            print(f"  ║  {seg_summary}")
             print(f"  ╚══════════════════════════════════════════╝")
             print()
         elif still_counter >= still_required:
@@ -297,7 +360,7 @@ def main() -> None:
         h, w = frame.shape[:2]
 
         # Border
-        border_w = 6
+        border_w = 25
         cv.rectangle(frame, (0, 0), (w - 1, h - 1), status_color, border_w)
 
         # Draw MediaPipe keypoints on the frame
@@ -311,7 +374,7 @@ def main() -> None:
         # Info panel
         draw_info_panel(frame, sign_count, sign_length, motion,
                         low_th, high_th, still_counter, still_required,
-                        current_fps, status)
+                        current_fps, status, segment_log)
 
         # Motion meter
         draw_motion_meter(frame, motion, low_th, high_th)
@@ -324,7 +387,9 @@ def main() -> None:
     cv.destroyAllWindows()
     print()
     print("=" * 55)
-    print(f"  Session complete – {sign_count} signs detected")
+    print(f"  Session complete – {sign_count} segment(s) detected")
+    for s in segment_log:
+        print(f"    #{s['idx']}: {s['frames']} frames ({s['duration']:.2f}s)")
     print("=" * 55)
 
 

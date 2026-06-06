@@ -122,38 +122,47 @@ class Converter:
     def _extract_keypoints(result) -> np.ndarray:
         """Flatten MediaPipe Holistic landmarks into a single vector."""
 
-        # Face landmarks (468 landmarks × 3 = 1404)
-        face = np.zeros(468 * 3, dtype=np.float32)
+        # The new holistic landmarker model returns 478 face landmarks,
+        # but the existing pipeline (ML model, translation service) expects
+        # 468 (= 1662 total). Truncate to maintain compatibility.
+        MAX_FACE = 468
+        FACE_DIM = MAX_FACE * 3  # 1404
+
+        face = np.zeros(FACE_DIM, dtype=np.float32)
         if result.face_landmarks:
-            for i, lm in enumerate(result.face_landmarks[0]):
-                face[i * 3] = lm.x
-                face[i * 3 + 1] = lm.y
-                face[i * 3 + 2] = lm.z
+            for i, lm in enumerate(result.face_landmarks[:MAX_FACE]):
+                idx = i * 3
+                face[idx] = lm.x
+                face[idx + 1] = lm.y
+                face[idx + 2] = lm.z
 
         # Left hand landmarks (21 × 3 = 63)
         lh = np.zeros(21 * 3, dtype=np.float32)
         if result.left_hand_landmarks:
-            for i, lm in enumerate(result.left_hand_landmarks[0]):
-                lh[i * 3] = lm.x
-                lh[i * 3 + 1] = lm.y
-                lh[i * 3 + 2] = lm.z
+            for i, lm in enumerate(result.left_hand_landmarks):
+                idx = i * 3
+                lh[idx] = lm.x
+                lh[idx + 1] = lm.y
+                lh[idx + 2] = lm.z
 
         # Right hand landmarks (21 × 3 = 63)
         rh = np.zeros(21 * 3, dtype=np.float32)
         if result.right_hand_landmarks:
-            for i, lm in enumerate(result.right_hand_landmarks[0]):
-                rh[i * 3] = lm.x
-                rh[i * 3 + 1] = lm.y
-                rh[i * 3 + 2] = lm.z
+            for i, lm in enumerate(result.right_hand_landmarks):
+                idx = i * 3
+                rh[idx] = lm.x
+                rh[idx + 1] = lm.y
+                rh[idx + 2] = lm.z
 
         # Pose landmarks (33 × 4 = 132; includes visibility)
         pose = np.zeros(33 * 4, dtype=np.float32)
         if result.pose_landmarks:
-            for i, lm in enumerate(result.pose_landmarks[0]):
-                pose[i * 4] = lm.x
-                pose[i * 4 + 1] = lm.y
-                pose[i * 4 + 2] = lm.z
-                pose[i * 4 + 3] = lm.visibility if hasattr(lm, 'visibility') else 0.0
+            for i, lm in enumerate(result.pose_landmarks):
+                idx = i * 4
+                pose[idx] = lm.x
+                pose[idx + 1] = lm.y
+                pose[idx + 2] = lm.z
+                pose[idx + 3] = lm.visibility if hasattr(lm, 'visibility') else 0.0
 
         concat = np.concatenate([face, lh, rh, pose])
 
