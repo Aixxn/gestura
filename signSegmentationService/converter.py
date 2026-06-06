@@ -58,6 +58,13 @@ class Converter:
         self._debug_image = None
         self._last_result = None
 
+        # Drawing persistence cache — stores normalized (x, y) coordinates
+        # for each landmark group so draw_landmarks() always has something
+        # to render, even when MediaPipe briefly loses detection.
+        self._draw_face: list[tuple[float, float]] = []
+        self._draw_lh: list[tuple[float, float]] = []
+        self._draw_rh: list[tuple[float, float]] = []
+
         # Landmark persistence cache — when MediaPipe briefly loses a hand
         # (detection flicker), reuse the last-known keypoints instead of
         # falling back to zeros. This prevents huge motion spikes when the
@@ -127,33 +134,44 @@ class Converter:
         return self.window
 
     def draw_landmarks(self, frame: np.ndarray) -> None:
-        """Draw the MediaPipe holistic landmark mesh onto *frame* in-place."""
+        """Draw the MediaPipe holistic landmark mesh onto *frame* in-place.
+
+        Uses cached coordinates when MediaPipe briefly loses a landmark
+        group, so the overlay stays stable instead of flickering.
+        """
         if self._last_result is None:
             return
         h, w = frame.shape[:2]
         result = self._last_result
 
-        # Face landmarks (drawn as small dots)
+        def _to_px(nx: float, ny: float) -> tuple[int, int]:
+            return int(nx * w), int(ny * h)
+
+        # --- Face landmarks (drawn as small dots) ---
         if result.face_landmarks:
-            for lm in result.face_landmarks:
-                cx, cy = int(lm.x * w), int(lm.y * h)
-                cv.circle(frame, (cx, cy), 1, (200, 200, 100), -1)
+            self._draw_face = [(lm.x, lm.y) for lm in result.face_landmarks]
+        for nx, ny in self._draw_face:
+            cv.circle(frame, _to_px(nx, ny), 1, (200, 200, 100), -1)
 
         # (Pose landmarks intentionally omitted — reduces visual clutter)
 
-        # Left hand landmarks
+        hand_conn = [(i, i + 1) for i in range(20)]
+
+        # --- Left hand landmarks ---
         if result.left_hand_landmarks:
-            hand_conn = [(i, i + 1) for i in range(20)]
-            pts = [(int(lm.x * w), int(lm.y * h)) for lm in result.left_hand_landmarks]
+            self._draw_lh = [(lm.x, lm.y) for lm in result.left_hand_landmarks]
+        if self._draw_lh:
+            pts = [_to_px(nx, ny) for nx, ny in self._draw_lh]
             for a, b in hand_conn:
                 cv.line(frame, pts[a], pts[b], (255, 0, 100), 2)
             for pt in pts:
                 cv.circle(frame, pt, 4, (255, 50, 150), -1)
 
-        # Right hand landmarks
+        # --- Right hand landmarks ---
         if result.right_hand_landmarks:
-            hand_conn = [(i, i + 1) for i in range(20)]
-            pts = [(int(lm.x * w), int(lm.y * h)) for lm in result.right_hand_landmarks]
+            self._draw_rh = [(lm.x, lm.y) for lm in result.right_hand_landmarks]
+        if self._draw_rh:
+            pts = [_to_px(nx, ny) for nx, ny in self._draw_rh]
             for a, b in hand_conn:
                 cv.line(frame, pts[a], pts[b], (100, 0, 255), 2)
             for pt in pts:
