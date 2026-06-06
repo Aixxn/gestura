@@ -33,7 +33,10 @@ Visual indicators
       (helps you verify at a glance if the right number of segments
       was detected)
 
-  ● Keypoints overlaid on the camera feed (MediaPipe Holistic)
+  ● MediaPipe holistic mesh overlaid on the camera feed
+      (face dots, pose skeleton in green, hands in pink/purple)
+      Watch for flickering — if landmarks jitter when you're still,
+      that's why the still counter doesn't increment.
 """
 
 from __future__ import annotations
@@ -363,13 +366,8 @@ def main() -> None:
         border_w = 25
         cv.rectangle(frame, (0, 0), (w - 1, h - 1), status_color, border_w)
 
-        # Draw MediaPipe keypoints on the frame
-        debug_img = getattr(converter, '_debug_image', None)
-        if debug_img is not None and debug_img.shape[:2] == frame.shape[:2]:
-            # Blend the debug keypoint overlay
-            overlay_alpha = 0.3
-            frame = cv.addWeighted(frame, 1 - overlay_alpha,
-                                   debug_img, overlay_alpha, 0)
+        # Draw MediaPipe holistic mesh on the frame
+        converter.draw_landmarks(frame)
 
         # Info panel
         draw_info_panel(frame, sign_count, sign_length, motion,

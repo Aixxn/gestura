@@ -55,6 +55,7 @@ class Converter:
         self.current_length = 0  # how many real frames have been inserted
 
         self._debug_image = None
+        self._last_result = None
 
     def __del__(self):
         if hasattr(self, 'landmarker'):
@@ -81,6 +82,7 @@ class Converter:
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=image_rgb)
 
         detection_result = self.landmarker.detect(mp_image)
+        self._last_result = detection_result
         keypoints = self._extract_keypoints(detection_result)
 
         self._debug_image = cv.cvtColor(image_rgb, cv.COLOR_RGB2BGR)
@@ -113,6 +115,58 @@ class Converter:
     def stop(self) -> np.ndarray:
         """Return the current window snapshot (right-padded with zeros)."""
         return self.window
+
+    def draw_landmarks(self, frame: np.ndarray) -> None:
+        """Draw the MediaPipe holistic landmark mesh onto *frame* in-place."""
+        if self._last_result is None:
+            return
+        h, w = frame.shape[:2]
+        result = self._last_result
+
+        # Face landmarks (drawn as small dots)
+        if result.face_landmarks:
+            for lm in result.face_landmarks:
+                cx, cy = int(lm.x * w), int(lm.y * h)
+                cv.circle(frame, (cx, cy), 1, (200, 200, 100), -1)
+
+        # Pose landmarks (drawn as larger dots + skeleton lines)
+        if result.pose_landmarks:
+            pose_conn = [
+                (0, 1), (1, 2), (2, 3), (3, 7),  # nose → eyes → ear
+                (0, 4), (4, 5), (5, 6), (6, 8),  # other eye
+                (9, 10),  # mouth
+                (11, 12),  # shoulders
+                (11, 13), (13, 15),  # left arm
+                (12, 14), (14, 16),  # right arm
+                (11, 23), (12, 24),  # shoulders → hips
+                (23, 24),  # hips
+                (23, 25), (25, 27),  # left leg
+                (24, 26), (26, 28),  # right leg
+            ]
+            pts = [(int(lm.x * w), int(lm.y * h)) for lm in result.pose_landmarks]
+            for a, b in pose_conn:
+                if a < len(pts) and b < len(pts):
+                    cv.line(frame, pts[a], pts[b], (0, 255, 0), 2)
+            for pt in pts:
+                cv.circle(frame, pt, 4, (0, 200, 0), -1)
+
+        # Left hand landmarks
+        if result.left_hand_landmarks:
+            hand_conn = [(i, i + 1) for i in range(20)]
+            pts = [(int(lm.x * w), int(lm.y * h)) for lm in result.left_hand_landmarks]
+            for a, b in hand_conn:
+                cv.line(frame, pts[a], pts[b], (255, 0, 100), 2)
+            for pt in pts:
+                cv.circle(frame, pt, 4, (255, 50, 150), -1)
+
+        # Right hand landmarks
+        if result.right_hand_landmarks:
+            hand_conn = [(i, i + 1) for i in range(20)]
+            pts = [(int(lm.x * w), int(lm.y * h)) for lm in result.right_hand_landmarks]
+            for a, b in hand_conn:
+                cv.line(frame, pts[a], pts[b], (100, 0, 255), 2)
+            for pt in pts:
+                cv.circle(frame, pt, 4, (150, 50, 255), -1)
 
     # ------------------------------------------------------------------
     # Internal helpers
