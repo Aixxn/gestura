@@ -31,7 +31,7 @@ class MotionDetector:
     def __init__(self,
                  low_factor: float = 0.5,
                  high_factor: float = 4.0,
-                 still_frames_required: int = 3,
+                 still_frames_required: int = 4,
                  min_sign_duration: int = 5,
                  history_size: int = 30,
                  feature_dim: int = 1662,
