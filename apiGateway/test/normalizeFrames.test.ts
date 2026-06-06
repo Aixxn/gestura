@@ -10,26 +10,26 @@ describe('normalizeFrames()', () => {
 
   describe('edge cases', () => {
     it('returns [] when given an empty array', () => {
-      expect(normalizeFrames([], 80, FD)).to.deep.equal([]);
+      expect(normalizeFrames([], 80)).to.deep.equal([]);
     });
 
     it('returns the same array when lengths already match', () => {
       const frames = makeFrames(80);
-      const result = normalizeFrames(frames, 80, FD);
+      const result = normalizeFrames(frames, 80);
       expect(result).to.equal(frames);
       expect(result).to.deep.equal(frames);
     });
 
     it('handles targetFrames of 1 (extreme downsampling)', () => {
       const frames = makeFrames(100);
-      const result = normalizeFrames(frames, 1, FD);
+      const result = normalizeFrames(frames, 1);
       expect(result).to.have.length(1);
       expect(result[0]).to.deep.equal(frames[0]);
     });
 
     it('handles a single frame padded to target size', () => {
       const frames = makeFrames(1);
-      const result = normalizeFrames(frames, 80, FD);
+      const result = normalizeFrames(frames, 80);
       expect(result).to.have.length(80);
       result.forEach(frame => {
         expect(frame).to.deep.equal(frames[0]);
@@ -40,20 +40,20 @@ describe('normalizeFrames()', () => {
   describe('downsampling (n > targetFrames)', () => {
     it('preserves first and last frames', () => {
       const frames = makeFrames(100);
-      const result = normalizeFrames(frames, 80, FD);
+      const result = normalizeFrames(frames, 80);
       expect(result[0]).to.deep.equal(frames[0]);
       expect(result[result.length - 1]).to.deep.equal(frames[frames.length - 1]);
     });
 
     it('produces exactly targetFrames frames', () => {
-      expect(normalizeFrames(makeFrames(200), 80, FD)).to.have.length(80);
-      expect(normalizeFrames(makeFrames(120), 80, FD)).to.have.length(80);
-      expect(normalizeFrames(makeFrames(81), 80, FD)).to.have.length(80);
+      expect(normalizeFrames(makeFrames(200), 80)).to.have.length(80);
+      expect(normalizeFrames(makeFrames(120), 80)).to.have.length(80);
+      expect(normalizeFrames(makeFrames(81), 80)).to.have.length(80);
     });
 
     it('selects uniformly spaced indices', () => {
       const frames = makeFrames(80);
-      const result = normalizeFrames(frames, 40, FD);
+      const result = normalizeFrames(frames, 40);
       const expectedIndices = Array.from({ length: 40 }, (_, i) =>
         Math.round((79 * i) / 39)
       );
@@ -66,7 +66,7 @@ describe('normalizeFrames()', () => {
   describe('padding (n < targetFrames)', () => {
     it('repeats the last frame for padding', () => {
       const frames = makeFrames(50);
-      const result = normalizeFrames(frames, 80, FD);
+      const result = normalizeFrames(frames, 80);
       expect(result).to.have.length(80);
       for (let i = 0; i < 50; i++) {
         expect(result[i]).to.deep.equal(frames[i]);
@@ -78,22 +78,22 @@ describe('normalizeFrames()', () => {
     });
 
     it('produces exactly targetFrames frames', () => {
-      expect(normalizeFrames(makeFrames(10), 80, FD)).to.have.length(80);
-      expect(normalizeFrames(makeFrames(40), 80, FD)).to.have.length(80);
-      expect(normalizeFrames(makeFrames(79), 80, FD)).to.have.length(80);
+      expect(normalizeFrames(makeFrames(10), 80)).to.have.length(80);
+      expect(normalizeFrames(makeFrames(40), 80)).to.have.length(80);
+      expect(normalizeFrames(makeFrames(79), 80)).to.have.length(80);
     });
   });
 
   describe('feature dimension integrity', () => {
     it('preserves inner array lengths', () => {
-      const result = normalizeFrames(makeFrames(100, FD), 80, FD);
+      const result = normalizeFrames(makeFrames(100, FD), 80);
       result.forEach(frame => {
         expect(frame).to.have.length(FD);
       });
     });
 
     it('preserves inner array lengths when padding', () => {
-      const result = normalizeFrames(makeFrames(50, FD), 80, FD);
+      const result = normalizeFrames(makeFrames(50, FD), 80);
       result.forEach(frame => {
         expect(frame).to.have.length(FD);
       });
@@ -101,7 +101,7 @@ describe('normalizeFrames()', () => {
 
     it('preserves feature values correctly after padding (last frame copy)', () => {
       const frames = makeFrames(3, 4);
-      const result = normalizeFrames(frames, 6, 4);
+      const result = normalizeFrames(frames, 6);
       expect(result).to.have.length(6);
       expect(result[0]).to.deep.equal(frames[0]);
       expect(result[1]).to.deep.equal(frames[1]);
@@ -113,7 +113,7 @@ describe('normalizeFrames()', () => {
 
     it('preserves feature values correctly after downsampling', () => {
       const frames = makeFrames(6, 4);
-      const result = normalizeFrames(frames, 3, 4);
+      const result = normalizeFrames(frames, 3);
       expect(result).to.have.length(3);
       expect(result[0]).to.deep.equal(frames[0]);
       expect(result[1]).to.deep.equal(frames[3]); // round(5*1/2) = 3

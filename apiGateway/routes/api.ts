@@ -3,12 +3,10 @@ import multer from 'multer';
 import { WebSocketServer } from 'ws'
 import axios from 'axios';
 
-const WEB_SOCKET_HOST = process.env.WEB_SOCKET_PORT || '0.0.0.0';
-const WEB_SOCKET_PORT = parseInt(process.env.WEB_SOCKET_HOST || '9898');
+const WEB_SOCKET_HOST = process.env.WEB_SOCKET_HOST || '0.0.0.0';
+const WEB_SOCKET_PORT = parseInt(process.env.WEB_SOCKET_PORT || '9898');
 const SEGMENTATION_SERVICE_URL = process.env.SEGMENTATION_SERVICE_URL || 'http://signsegmentationservice:8000';
 const MODEL_WINDOW_SIZE = parseInt(process.env.MODEL_WINDOW_SIZE || '80');
-const MODEL_FEATURE_DIM = parseInt(process.env.MODEL_FEATURE_DIM || '1663');
-
 const translationRouter = express.Router();
 const wss = new WebSocketServer({ host: WEB_SOCKET_HOST, port: WEB_SOCKET_PORT });
 const sessionMap = new Map(); // Maps UUID to WebSocket
@@ -21,7 +19,7 @@ const sessionSignsBuffer = new Map(); // Maps UUID to array of signs for current
  * - If too short: repeat the last frame (natural held-position padding)
  * - If exact match: return as-is
  */
-export function normalizeFrames(frames: number[][], targetFrames: number, _featureDim: number): number[][] {
+export function normalizeFrames(frames: number[][], targetFrames: number): number[][] {
   const n = frames.length;
   if (n === 0) return [];
   if (n === targetFrames) return frames;
@@ -176,12 +174,11 @@ translationRouter.post('/convert', upload.single('rawImage'), async (req, res) =
                 ...rawSign,
                 keypoints_sequence: normalizeFrames(
                     rawSign.keypoints_sequence,
-                    MODEL_WINDOW_SIZE,
-                    MODEL_FEATURE_DIM
+                    MODEL_WINDOW_SIZE
                 ),
                 // Also normalize the window snapshot if present
                 window: rawSign.window
-                    ? normalizeFrames(rawSign.window, MODEL_WINDOW_SIZE, MODEL_FEATURE_DIM)
+                    ? normalizeFrames(rawSign.window, MODEL_WINDOW_SIZE)
                     : rawSign.window,
             };
             
