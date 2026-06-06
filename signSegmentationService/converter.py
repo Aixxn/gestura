@@ -47,6 +47,7 @@ class Converter:
         options = vision.HolisticLandmarkerOptions(
             base_options=base_options,
             running_mode=vision.RunningMode.IMAGE,
+            min_hand_landmarks_confidence=0.7,  # reduce jittery hand detections
         )
         self.landmarker = vision.HolisticLandmarker.create_from_options(options)
 

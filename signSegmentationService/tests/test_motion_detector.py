@@ -16,7 +16,7 @@ from motion_detector import MotionDetector
 
 @pytest.fixture
 def detector():
-    """Return a default MotionDetector with small values for fast tests."""
+    """Return a MotionDetector with small values for fast tests."""
     return MotionDetector(
         low_factor=0.5,
         high_factor=2.0,
@@ -24,6 +24,8 @@ def detector():
         min_sign_duration=2,       # minimum 2 frames before sign can end
         history_size=10,
         feature_dim=1662,
+        motion_smoothing=0.0,      # no smoothing for deterministic tests
+        stillness_floor=0.0,       # no floor for deterministic tests
     )
 
 
@@ -162,7 +164,7 @@ class TestSignEnding:
         assert detector.sign_frames == 0
         assert detector.previous_keypoints is None
         assert len(detector.current_sign_keypoints) == 0
-        assert len(detector.motion_history) == 0
+        assert len(detector.raw_motion_history) == 0
         assert detector.get_current_sign_length() == 0
 
 
@@ -176,7 +178,7 @@ class TestAdaptiveThresholds:
         detector.update(random_keypoints)
         for i in range(12):
             detector.update(random_keypoints + 5.0 + i * 0.1)
-        median = float(np.median(list(detector.motion_history)))
+        median = float(np.median(list(detector.raw_motion_history)))
         assert median > 4.0, f"Expected median > 4.0, got {median}"
 
     def test_fallback_thresholds_without_history(self, detector, random_keypoints):
@@ -257,6 +259,8 @@ class TestParameters:
             min_sign_duration=10,
             history_size=50,
             feature_dim=1024,
+            motion_smoothing=0.0,
+            stillness_floor=0.0,
         )
         assert d.low_factor == 0.3
         assert d.high_factor == 1.5
@@ -264,16 +268,18 @@ class TestParameters:
         assert d.min_sign_duration == 10
         assert d.history_size == 50
         assert d.feature_dim == 1024
-        assert d.motion_history.maxlen == 50
+        assert d.raw_motion_history.maxlen == 50
 
     def test_default_parameters(self):
         d = MotionDetector()
-        assert d.low_factor == 0.5
+        assert d.low_factor == 0.3
         assert d.high_factor == 2.0
-        assert d.still_frames_required == 15
+        assert d.still_frames_required == 8
         assert d.min_sign_duration == 5
         assert d.history_size == 30
         assert d.feature_dim == 1662
+        assert d.motion_smoothing == 0.6
+        assert d.stillness_floor == 0.015
 
 
 # ===================================================================

@@ -7,23 +7,36 @@ class MotionDetector:
     """
     Detects when hand motion stops to determine sign boundaries.
 
-    Uses hysteresis with adaptive thresholding for robustness:
-      - motion < low_threshold   → still_counter increments
-      - motion > high_threshold  → still_counter resets
-      - low ≤ motion ≤ high      → hysteresis band (holds previous state)
+    Strategy
+    --------
+    1. Raw motion is computed from raw keypoints (no smoothing — preserves
+       the true timing of gestures).
+    2. Motion magnitude is smoothed with an EMA to suppress jitter spikes.
+    3. A hard **stillness_floor** guarantees that tiny jitter is always
+       treated as stillness, breaking the noise-feedback loop.
+    4. Hysteresis thresholds adapt to the median of recent motion.
 
-    When *still_frames_required* consecutive frames stay below the low
-    threshold, the current sign is considered complete.
+    Flow for each frame:
+      raw_motion = ||keypoints[t] - keypoints[t-1]||
+      smoothed_motion = EMA(raw_motion)
+      if smoothed_motion < stillness_floor → still_counter++
+      elif motion < low_threshold       → still_counter++
+      elif motion > high_threshold      → still_counter = 0
+      else                              → hysteresis (hold state)
+
+    When *still_frames_required* consecutive frames stay still, the
+    current sign is considered complete.
     """
 
     def __init__(self,
-                 low_factor: float = 0.5,
+                 low_factor: float = 0.3,
                  high_factor: float = 2.0,
-                 still_frames_required: int = 15,
+                 still_frames_required: int = 8,
                  min_sign_duration: int = 5,
                  history_size: int = 30,
                  feature_dim: int = 1662,
-                 smoothing_alpha: float = 0.0):
+                 motion_smoothing: float = 0.6,
+                 stillness_floor: float = 0.015):
         """
         Parameters
         ----------
@@ -32,16 +45,20 @@ class MotionDetector:
         high_factor : float
             Multiplier for the adaptive high threshold.
         still_frames_required : int
-            Consecutive frames below low threshold to end a sign.
+            Consecutive frames still to end a sign.
         min_sign_duration : int
-            Minimum frames required for a valid sign (filters noise bursts).
+            Minimum frames for a valid sign (noise filter).
         history_size : int
-            Number of recent frames to use for the adaptive threshold median.
+            Recent frames for the adaptive threshold median.
         feature_dim : int
             Expected dimensionality of the keypoint vector.
-        smoothing_alpha : float
-            EMA smoothing factor for keypoints (0=no smoothing, 1=fully smooth).
-            Helps suppress MediaPipe jitter. 0.4 is a good default.
+        motion_smoothing : float
+            EMA factor for the motion magnitude (0=no smoothing, 0.9=heavy).
+            Smoothes out jitter spikes while keeping motion timing intact.
+        stillness_floor : float
+            Absolute motion value below which we ALWAYS count as still,
+            regardless of adaptive thresholds. Prevents jitter from
+            blocking segmentation.
         """
         self.low_factor = low_factor
         self.high_factor = high_factor
@@ -49,15 +66,16 @@ class MotionDetector:
         self.min_sign_duration = min_sign_duration
         self.history_size = history_size
         self.feature_dim = feature_dim
-        self.smoothing_alpha = smoothing_alpha
+        self.motion_smoothing = motion_smoothing
+        self.stillness_floor = stillness_floor
 
         # Runtime state
-        self.motion_history = deque(maxlen=history_size)
+        self.raw_motion_history = deque(maxlen=history_size)
+        self.smoothed_motion = 0.0
         self.still_counter = 0
         self.sign_frames = 0
         self.previous_keypoints: Optional[np.ndarray] = None
         self.current_sign_keypoints: List[np.ndarray] = []
-        self.smoothed_keypoints: Optional[np.ndarray] = None
 
     # ------------------------------------------------------------------
     # Public API
@@ -77,42 +95,45 @@ class MotionDetector:
         # --- input validation ---
         self._validate_keypoints(keypoints)
 
-        # --- optionally apply EMA smoothing to suppress jitter ---
-        if self.smoothing_alpha > 0 and self.smoothed_keypoints is not None:
-            # smoothing_alpha=0.4 → 40% old + 60% new (moderate)
-            a = self.smoothing_alpha
-            self.smoothed_keypoints = (
-                a * self.smoothed_keypoints + (1.0 - a) * keypoints
-            )
-        else:
-            # No smoothing, or first frame — use raw keypoints
-            self.smoothed_keypoints = keypoints.copy()
-
-        ready_kp = self.smoothed_keypoints
-
         # --- first frame ---
         if self.previous_keypoints is None:
-            self.previous_keypoints = ready_kp.copy()
-            self.current_sign_keypoints.append(keypoints.copy())  # raw
+            self.previous_keypoints = keypoints.copy()
+            self.current_sign_keypoints.append(keypoints.copy())
             self.sign_frames = 1
+            self.smoothed_motion = 0.0
             return False, None
 
-        # --- motion computation (on smoothed keypoints) ---
-        motion = float(np.linalg.norm(ready_kp - self.previous_keypoints))
-        self.motion_history.append(motion)
-        self.previous_keypoints = ready_kp.copy()
+        # --- raw motion (always from raw keypoints — preserves timing) ---
+        raw_motion = float(np.linalg.norm(keypoints - self.previous_keypoints))
+        self.previous_keypoints = keypoints.copy()
+
+        # --- smooth the motion magnitude (not the keypoints) ---
+        # This damps jitter spikes while keeping the onset of real motion sharp.
+        a = self.motion_smoothing
+        if self.sign_frames > 1:
+            self.smoothed_motion = a * self.smoothed_motion + (1.0 - a) * raw_motion
+        else:
+            self.smoothed_motion = raw_motion
+
+        self.raw_motion_history.append(raw_motion)
 
         # --- adaptive thresholds ---
-        if len(self.motion_history) >= 10:
-            adaptive_base = float(np.median(list(self.motion_history)))
+        if len(self.raw_motion_history) >= 10:
+            adaptive_base = float(np.median(list(self.raw_motion_history)))
             low_th = adaptive_base * self.low_factor
             high_th = adaptive_base * self.high_factor
         else:
             low_th = 0.02
             high_th = 0.08
 
+        # Use smoothed motion for hysteresis decisions
+        motion = self.smoothed_motion
+
         # --- hysteresis state machine ---
-        if motion < low_th:
+        if motion < self.stillness_floor:
+            # Hard floor: guaranteed stillness detection
+            self.still_counter += 1
+        elif motion < low_th:
             self.still_counter += 1
         elif motion > high_th:
             self.still_counter = 0
@@ -136,12 +157,12 @@ class MotionDetector:
 
     def reset(self):
         """Return the detector to its initial state."""
-        self.motion_history.clear()
+        self.raw_motion_history.clear()
+        self.smoothed_motion = 0.0
         self.still_counter = 0
         self.sign_frames = 0
         self.previous_keypoints = None
         self.current_sign_keypoints.clear()
-        self.smoothed_keypoints = None
 
     def get_current_sign_length(self) -> int:
         return len(self.current_sign_keypoints)
