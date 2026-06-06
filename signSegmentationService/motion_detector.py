@@ -29,14 +29,14 @@ class MotionDetector:
     """
 
     def __init__(self,
-                 low_factor: float = 0.3,
+                 low_factor: float = 0.5,
                  high_factor: float = 2.0,
                  still_frames_required: int = 8,
                  min_sign_duration: int = 5,
                  history_size: int = 30,
                  feature_dim: int = 1662,
                  motion_smoothing: float = 0.6,
-                 stillness_floor: float = 0.015):
+                 stillness_floor: float = 0.08):
         """
         Parameters
         ----------

@@ -272,14 +272,14 @@ class TestParameters:
 
     def test_default_parameters(self):
         d = MotionDetector()
-        assert d.low_factor == 0.3
+        assert d.low_factor == 0.5
         assert d.high_factor == 2.0
         assert d.still_frames_required == 8
         assert d.min_sign_duration == 5
         assert d.history_size == 30
         assert d.feature_dim == 1662
         assert d.motion_smoothing == 0.6
-        assert d.stillness_floor == 0.015
+        assert d.stillness_floor == 0.08
 
 
 # ===================================================================
