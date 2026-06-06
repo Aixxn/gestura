@@ -58,6 +58,15 @@ class Converter:
         self._debug_image = None
         self._last_result = None
 
+        # Landmark persistence cache — when MediaPipe briefly loses a hand
+        # (detection flicker), reuse the last-known keypoints instead of
+        # falling back to zeros. This prevents huge motion spikes when the
+        # hand "pops" back into view.
+        self._last_face = np.zeros(468 * 3, dtype=np.float32)
+        self._last_lh = np.zeros(21 * 3, dtype=np.float32)
+        self._last_rh = np.zeros(21 * 3, dtype=np.float32)
+        self._last_pose = np.zeros(33 * 4, dtype=np.float32)
+
     def __del__(self):
         if hasattr(self, 'landmarker'):
             self.landmarker.close()
@@ -154,16 +163,20 @@ class Converter:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _extract_keypoints(result) -> np.ndarray:
-        """Flatten MediaPipe Holistic landmarks into a single vector."""
+    def _extract_keypoints(self, result) -> np.ndarray:
+        """Flatten MediaPipe Holistic landmarks into a single vector.
 
+        When a landmark group (e.g. left hand) is not detected in the current
+        frame, the **last known** keypoints are reused instead of zeros.
+        This prevents huge motion spikes from detection flicker.
+        """
         # The new holistic landmarker model returns 478 face landmarks,
         # but the existing pipeline (ML model, translation service) expects
         # 468 (= 1662 total). Truncate to maintain compatibility.
         MAX_FACE = 468
         FACE_DIM = MAX_FACE * 3  # 1404
 
+        # --- Face landmarks ---
         face = np.zeros(FACE_DIM, dtype=np.float32)
         if result.face_landmarks:
             for i, lm in enumerate(result.face_landmarks[:MAX_FACE]):
@@ -171,8 +184,12 @@ class Converter:
                 face[idx] = lm.x
                 face[idx + 1] = lm.y
                 face[idx + 2] = lm.z
+            self._last_face = face.copy()
+        else:
+            face = self._last_face.copy()
 
-        # Left hand landmarks (21 × 3 = 63)
+        # --- Left hand landmarks (21 × 3 = 63) ---
+        # Most prone to flicker — persistence is critical here.
         lh = np.zeros(21 * 3, dtype=np.float32)
         if result.left_hand_landmarks:
             for i, lm in enumerate(result.left_hand_landmarks):
@@ -180,8 +197,11 @@ class Converter:
                 lh[idx] = lm.x
                 lh[idx + 1] = lm.y
                 lh[idx + 2] = lm.z
+            self._last_lh = lh.copy()
+        else:
+            lh = self._last_lh.copy()
 
-        # Right hand landmarks (21 × 3 = 63)
+        # --- Right hand landmarks (21 × 3 = 63) ---
         rh = np.zeros(21 * 3, dtype=np.float32)
         if result.right_hand_landmarks:
             for i, lm in enumerate(result.right_hand_landmarks):
@@ -189,8 +209,11 @@ class Converter:
                 rh[idx] = lm.x
                 rh[idx + 1] = lm.y
                 rh[idx + 2] = lm.z
+            self._last_rh = rh.copy()
+        else:
+            rh = self._last_rh.copy()
 
-        # Pose landmarks (33 × 4 = 132; includes visibility)
+        # --- Pose landmarks (33 × 4 = 132; includes visibility) ---
         pose = np.zeros(33 * 4, dtype=np.float32)
         if result.pose_landmarks:
             for i, lm in enumerate(result.pose_landmarks):
@@ -199,6 +222,9 @@ class Converter:
                 pose[idx + 1] = lm.y
                 pose[idx + 2] = lm.z
                 pose[idx + 3] = lm.visibility if hasattr(lm, 'visibility') else 0.0
+            self._last_pose = pose.copy()
+        else:
+            pose = self._last_pose.copy()
 
         concat = np.concatenate([face, lh, rh, pose])
 
