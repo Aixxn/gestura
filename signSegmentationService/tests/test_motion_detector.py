@@ -23,7 +23,7 @@ def detector():
         still_frames_required=3,   # low so tests aren't sluggish
         min_sign_duration=2,       # minimum 2 frames before sign can end
         history_size=10,
-        feature_dim=1662,
+        feature_dim=258,
         motion_smoothing=0.0,      # no smoothing for deterministic tests
         stillness_floor=0.0,       # no floor for deterministic tests
     )
@@ -31,15 +31,15 @@ def detector():
 
 @pytest.fixture
 def random_keypoints():
-    """Return a realistic 1662-dim keypoint vector (noise)."""
+    """Return a realistic 258-dim keypoint vector (noise)."""
     rng = np.random.default_rng(42)
-    return rng.random(1662).astype(np.float32)
+    return rng.random(258).astype(np.float32)
 
 
 @pytest.fixture
 def zero_keypoints():
     """Return a zero keypoint vector with the expected shape."""
-    return np.zeros(1662, dtype=np.float32)
+    return np.zeros(258, dtype=np.float32)
 
 
 # ---------------------------------------------------------------------------
@@ -98,7 +98,7 @@ class TestMotionThresholds:
             still_frames_required=30,  # high → no sign endings during setup
             min_sign_duration=2,
             history_size=10,
-            feature_dim=1662,
+            feature_dim=258,
             motion_smoothing=0.0,
             stillness_floor=0.0,
         )
@@ -149,7 +149,7 @@ class TestSignEnding:
         detector = MotionDetector(
             still_frames_required=1,
             min_sign_duration=100,  # very high
-            feature_dim=1662,
+            feature_dim=258,
         )
         detector.update(random_keypoints)
         kp = random_keypoints + 1e-6
@@ -194,7 +194,7 @@ class TestAdaptiveThresholds:
         for i in range(12):
             detector.update(random_keypoints + 5.0 + i * 0.1)
         median = float(np.median(list(detector.raw_motion_history)))
-        assert median > 4.0, f"Expected median > 4.0, got {median}"
+        assert median > 1.0, f"Expected median > 1.0, got {median}"
 
     def test_fallback_thresholds_without_history(self, detector, random_keypoints):
         detector.update(random_keypoints)
@@ -226,19 +226,19 @@ class TestEdgeCases:
         assert detector.sign_frames >= 1
 
     def test_negative_keypoint_values(self, detector):
-        neg = np.full(1662, -0.5, dtype=np.float32)
+        neg = np.full(258, -0.5, dtype=np.float32)
         detector.update(neg)
-        detector.update(np.full(1662, -0.3, dtype=np.float32))
+        detector.update(np.full(258, -0.3, dtype=np.float32))
         assert detector.sign_frames == 2
 
     def test_nan_keypoints(self, detector, random_keypoints):
-        nan_kp = np.full(1662, np.nan, dtype=np.float32)
+        nan_kp = np.full(258, np.nan, dtype=np.float32)
         detector.update(random_keypoints)
         detector.update(nan_kp)
         assert detector.sign_frames == 2
 
     def test_inf_keypoints(self, detector, random_keypoints):
-        inf_kp = np.full(1662, np.inf, dtype=np.float32)
+        inf_kp = np.full(258, np.inf, dtype=np.float32)
         detector.update(random_keypoints)
         detector.update(inf_kp)
         assert detector.sign_frames == 2
@@ -249,7 +249,7 @@ class TestEdgeCases:
 
     def test_2d_keypoints_raises_value_error(self, detector):
         with pytest.raises(ValueError, match="Expected 1-D"):
-            detector.update(np.ones((1, 1662), dtype=np.float32))
+            detector.update(np.ones((1, 258), dtype=np.float32))
 
     def test_get_current_sign_length_after_reset(self, detector, random_keypoints):
         detector.update(random_keypoints)
@@ -292,7 +292,7 @@ class TestParameters:
         assert d.still_frames_required == 8
         assert d.min_sign_duration == 5
         assert d.history_size == 30
-        assert d.feature_dim == 1662
+        assert d.feature_dim == 258
         assert d.motion_smoothing == 0.6
         assert d.stillness_floor == 0.3
 
@@ -309,7 +309,7 @@ class TestFullSequence:
 
         # Sign 1
         for i in range(6):
-            detector.update(rng.random(1662).astype(np.float32))
+            detector.update(rng.random(258).astype(np.float32))
 
         # Pause to end sign 1
         last_kp = random_keypoints.copy()
@@ -321,7 +321,7 @@ class TestFullSequence:
 
         # Sign 2
         for i in range(6):
-            detector.update(rng.random(1662).astype(np.float32))
+            detector.update(rng.random(258).astype(np.float32))
 
         # Pause to end sign 2
         last_kp = random_keypoints.copy()

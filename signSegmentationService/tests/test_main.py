@@ -23,10 +23,10 @@ from fastapi.testclient import TestClient
 # loading the real converter.py (which requires mediapipe).
 # ---------------------------------------------------------------------------
 
-DEFAULT_WINDOW = np.zeros((35, 1662), dtype=np.float32)
+DEFAULT_WINDOW = np.zeros((35, 258), dtype=np.float32)
 
 _mock_converter_module = types.ModuleType("converter")
-_mock_converter_module.FEATURE_DIM = 1662
+_mock_converter_module.FEATURE_DIM = 258
 _mock_converter_module.WINDOW_SIZE = 35
 
 
@@ -38,8 +38,8 @@ class _MockConverter:
         self.current_length = 0
 
     def point_detection(self, image_bytes: bytes) -> np.ndarray:
-        """Return a dummy 1662-dim keypoint vector (ignores input)."""
-        return np.zeros(1662, dtype=np.float32)
+        """Return a dummy 258-dim keypoint vector (ignores input)."""
+        return np.zeros(258, dtype=np.float32)
 
     def process_new_frame(self, frame_vector: np.ndarray) -> np.ndarray:
         """Slide the window and return its current state."""
@@ -56,7 +56,7 @@ class _MockConverter:
 
     def get_persisted_keypoints(self) -> np.ndarray:
         """Return the same dummy vector as point_detection."""
-        return np.zeros(1662, dtype=np.float32)
+        return np.zeros(258, dtype=np.float32)
 
 
 _mock_converter_module.Converter = _MockConverter
@@ -133,7 +133,7 @@ class TestProcessFrame:
 
     def test_sign_ended_returns_full_result(self, frame_req):
         """When a sign ends the endpoint returns SignResult with window."""
-        fake_sign = [np.zeros(1662, dtype=np.float32) for _ in range(5)]
+        fake_sign = [np.zeros(258, dtype=np.float32) for _ in range(5)]
 
         with patch.object(svc.motion_detector, 'update',
                           return_value=(True, fake_sign)):
@@ -147,10 +147,10 @@ class TestProcessFrame:
         assert isinstance(data["window"], list)
         assert len(data["window"]) == 35  # WINDOW_SIZE
         for frame in data["window"]:
-            assert len(frame) == 1662    # FEATURE_DIM
+            assert len(frame) == 258    # FEATURE_DIM
 
     def test_sign_index_increments(self, frame_req):
-        fake_sign = [np.zeros(1662, dtype=np.float32) for _ in range(3)]
+        fake_sign = [np.zeros(258, dtype=np.float32) for _ in range(3)]
 
         for idx in range(2):
             with patch.object(svc.motion_detector, 'update',
@@ -199,7 +199,7 @@ class TestProcessFrame:
     # -- Session isolation -----------------------------------------------
 
     def test_multiple_sessions_independent(self, valid_jpeg_bytes):
-        fake_sign = [np.zeros(1662, dtype=np.float32) for _ in range(3)]
+        fake_sign = [np.zeros(258, dtype=np.float32) for _ in range(3)]
         img = base64.b64encode(valid_jpeg_bytes).decode()
 
         with patch.object(svc.motion_detector, 'update',
