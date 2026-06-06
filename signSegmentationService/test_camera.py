@@ -329,7 +329,7 @@ def main() -> None:
                 "duration": est_duration,
             })
             status = "SIGN ENDED!"
-            status_color = (50, 50, 255)  # RED
+            status_color = (0, 0, 255)  # BRIGHT RED
 
             # Build a segment-summary string for console
             seg_summary = " ".join(
@@ -350,7 +350,7 @@ def main() -> None:
             print()
         elif still_counter >= still_required:
             status = f"STILL ({still_counter}/{still_required})"
-            status_color = (50, 50, 255)  # RED
+            status_color = (0, 0, 255)  # BRIGHT RED
 
         if motion < low_th:
             if status != "SIGN ENDED!" and status != f"STILL ({still_counter}/{still_required})":
