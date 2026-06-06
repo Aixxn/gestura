@@ -310,10 +310,10 @@ def main() -> None:
         still_required = detector.still_frames_required
         sign_length = detector.get_current_sign_length()
 
-        if len(detector.motion_history) > 0:
-            motion = detector.motion_history[-1]
-        if len(detector.motion_history) >= 10:
-            base = float(np.median(list(detector.motion_history)))
+        if detector.sign_frames > 1:
+            motion = detector.smoothed_motion
+        if len(detector.raw_motion_history) >= 10:
+            base = float(np.median(list(detector.raw_motion_history)))
             low_th = base * detector.low_factor
             high_th = base * detector.high_factor
 
