@@ -34,7 +34,8 @@ Visual indicators
       was detected)
 
   ● MediaPipe holistic mesh overlaid on the camera feed
-      (face dots, pose skeleton in green, hands in pink/purple)
+      (face dots in yellow, left hand in pink, right hand in purple)
+      Pose skeleton is hidden to reduce visual clutter.
       Watch for flickering — if landmarks jitter when you're still,
       that's why the still counter doesn't increment.
 """
@@ -223,7 +224,7 @@ def main() -> None:
     detector = MotionDetector(
         low_factor=0.5,
         high_factor=2.0,
-        still_frames_required=15,
+        still_frames_required=8,
         min_sign_duration=5,
         history_size=30,
         feature_dim=FEATURE_DIM,
