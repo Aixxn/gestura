@@ -22,7 +22,8 @@ class MotionDetector:
                  still_frames_required: int = 15,
                  min_sign_duration: int = 5,
                  history_size: int = 30,
-                 feature_dim: int = 1662):
+                 feature_dim: int = 1662,
+                 smoothing_alpha: float = 0.0):
         """
         Parameters
         ----------
@@ -38,6 +39,9 @@ class MotionDetector:
             Number of recent frames to use for the adaptive threshold median.
         feature_dim : int
             Expected dimensionality of the keypoint vector.
+        smoothing_alpha : float
+            EMA smoothing factor for keypoints (0=no smoothing, 1=fully smooth).
+            Helps suppress MediaPipe jitter. 0.4 is a good default.
         """
         self.low_factor = low_factor
         self.high_factor = high_factor
@@ -45,6 +49,7 @@ class MotionDetector:
         self.min_sign_duration = min_sign_duration
         self.history_size = history_size
         self.feature_dim = feature_dim
+        self.smoothing_alpha = smoothing_alpha
 
         # Runtime state
         self.motion_history = deque(maxlen=history_size)
@@ -52,6 +57,7 @@ class MotionDetector:
         self.sign_frames = 0
         self.previous_keypoints: Optional[np.ndarray] = None
         self.current_sign_keypoints: List[np.ndarray] = []
+        self.smoothed_keypoints: Optional[np.ndarray] = None
 
     # ------------------------------------------------------------------
     # Public API
@@ -71,17 +77,30 @@ class MotionDetector:
         # --- input validation ---
         self._validate_keypoints(keypoints)
 
+        # --- optionally apply EMA smoothing to suppress jitter ---
+        if self.smoothing_alpha > 0 and self.smoothed_keypoints is not None:
+            # smoothing_alpha=0.4 → 40% old + 60% new (moderate)
+            a = self.smoothing_alpha
+            self.smoothed_keypoints = (
+                a * self.smoothed_keypoints + (1.0 - a) * keypoints
+            )
+        else:
+            # No smoothing, or first frame — use raw keypoints
+            self.smoothed_keypoints = keypoints.copy()
+
+        ready_kp = self.smoothed_keypoints
+
         # --- first frame ---
         if self.previous_keypoints is None:
-            self.previous_keypoints = keypoints.copy()
-            self.current_sign_keypoints.append(keypoints.copy())
+            self.previous_keypoints = ready_kp.copy()
+            self.current_sign_keypoints.append(keypoints.copy())  # raw
             self.sign_frames = 1
             return False, None
 
-        # --- motion computation ---
-        motion = float(np.linalg.norm(keypoints - self.previous_keypoints))
+        # --- motion computation (on smoothed keypoints) ---
+        motion = float(np.linalg.norm(ready_kp - self.previous_keypoints))
         self.motion_history.append(motion)
-        self.previous_keypoints = keypoints.copy()
+        self.previous_keypoints = ready_kp.copy()
 
         # --- adaptive thresholds ---
         if len(self.motion_history) >= 10:
@@ -122,6 +141,7 @@ class MotionDetector:
         self.sign_frames = 0
         self.previous_keypoints = None
         self.current_sign_keypoints.clear()
+        self.smoothed_keypoints = None
 
     def get_current_sign_length(self) -> int:
         return len(self.current_sign_keypoints)

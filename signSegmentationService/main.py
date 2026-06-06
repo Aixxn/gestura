@@ -28,6 +28,7 @@ motion_detector = MotionDetector(
     min_sign_duration=5,       # minimum sign length (noise filter)
     history_size=30,
     feature_dim=FEATURE_DIM,   # validated on every update()
+    smoothing_alpha=0.4,       # EMA smooth keypoints to suppress jitter
 )
 
 # Per-session state (in production, replace with Redis)
