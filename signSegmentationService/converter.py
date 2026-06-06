@@ -55,7 +55,6 @@ class Converter:
         self.window = np.zeros((WINDOW_SIZE, FEATURE_DIM), dtype=np.float32)
         self.current_length = 0  # how many real frames have been inserted
 
-        self._debug_image = None
         self._last_result = None
 
         # Corrected hand references (set by _extract_keypoints after
@@ -121,8 +120,6 @@ class Converter:
         # Build persisted version for motion detector (swap in last-known
         # hand positions so detection flicker doesn't spike the motion signal).
         self._persisted_kp = self._build_persisted_kp()
-
-        self._debug_image = cv.cvtColor(image_rgb, cv.COLOR_RGB2BGR)
 
         if raw_kp.shape != (FEATURE_DIM,):
             raise ValueError(
