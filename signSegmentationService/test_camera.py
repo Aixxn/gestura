@@ -224,7 +224,7 @@ def main() -> None:
     detector = MotionDetector(
         low_factor=0.5,
         high_factor=4.0,
-        still_frames_required=3,
+        still_frames_required=4,
         min_sign_duration=5,
         history_size=30,
         feature_dim=FEATURE_DIM,
