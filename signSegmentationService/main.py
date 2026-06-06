@@ -22,14 +22,14 @@ app = FastAPI(title="Sign Segmentation Service")
 
 converter = Converter()
 motion_detector = MotionDetector(
-    low_factor=0.3,
+    low_factor=0.5,
     high_factor=2.0,
     still_frames_required=8,   # ~400 ms at 20 fps
     min_sign_duration=5,       # minimum sign length (noise filter)
     history_size=30,
     feature_dim=FEATURE_DIM,   # validated on every update()
     motion_smoothing=0.6,      # smooth motion signal to suppress jitter
-    stillness_floor=0.015,     # tiny motion is always "still"
+    stillness_floor=0.08,      # motion below this is always "still"
 )
 
 # Per-session state (in production, replace with Redis)
