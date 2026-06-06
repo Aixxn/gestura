@@ -19,3 +19,6 @@
 # docker
 **/Dockerfile
 **/.dockerignore
+
+# mediapipe model files (downloaded at runtime)
+**/*.task
