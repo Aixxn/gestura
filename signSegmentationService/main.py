@@ -80,13 +80,14 @@ async def process_frame(request: FrameRequest):
         raw_bytes = base64.b64decode(request.image_bytes)
 
         # --- 2. extract keypoints (Converter does the cv2 decode) ---
-        keypoints = converter.point_detection(raw_bytes)
+        keypoints = converter.point_detection(raw_bytes)        # raw (zeros for undetected)
+        persisted = converter.get_persisted_keypoints()          # motion-stable
 
-        # --- 3. maintain sliding window buffer ---
+        # --- 3. maintain sliding window buffer (raw keypoints → matches training) ---
         current_window = converter.process_new_frame(keypoints)
 
-        # --- 4. sign-boundary detection ---
-        sign_ended, completed_sign_keypoints = motion_detector.update(keypoints)
+        # --- 4. sign-boundary detection (persisted → no zero-to-real spikes) ---
+        sign_ended, completed_sign_keypoints = motion_detector.update(persisted, keypoints)
 
         # --- 5. session tracking ---
         session = session_states.setdefault(request.uuid, {

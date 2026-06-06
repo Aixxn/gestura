@@ -81,34 +81,49 @@ class MotionDetector:
     # Public API
     # ------------------------------------------------------------------
 
-    def update(self, keypoints: np.ndarray) -> Tuple[bool, Optional[List[np.ndarray]]]:
+    def update(self,
+               motion_kp: np.ndarray,
+               store_kp: Optional[np.ndarray] = None) -> Tuple[bool, Optional[List[np.ndarray]]]:
         """
-        Process a single frame's keypoints.
+        Process a single frame.
+
+        Parameters
+        ----------
+        motion_kp : np.ndarray
+            Used for motion calculation (persisted — last-known hand
+            positions fill in for detection flicker).
+        store_kp : np.ndarray or None
+            Stored in the sign buffer (raw — zeros for missing hands,
+            matching the ML model's training distribution).
+            When ``None`` (default), *motion_kp* is used for both roles
+            (backward-compatible with existing tests).
 
         Returns
         -------
         (sign_ended, completed_sign_keypoints)
             sign_ended : True if a sign was just completed.
             completed_sign_keypoints : list of per-frame keypoint vectors
-                                       for the just-completed sign, or None.
+                                       for the just-completed sign.
         """
+        if store_kp is None:
+            store_kp = motion_kp
+
         # --- input validation ---
-        self._validate_keypoints(keypoints)
+        self._validate_keypoints(motion_kp)
 
         # --- first frame ---
         if self.previous_keypoints is None:
-            self.previous_keypoints = keypoints.copy()
-            self.current_sign_keypoints.append(keypoints.copy())
+            self.previous_keypoints = motion_kp.copy()
+            self.current_sign_keypoints.append(store_kp.copy())
             self.sign_frames = 1
             self.smoothed_motion = 0.0
             return False, None
 
-        # --- raw motion (always from raw keypoints — preserves timing) ---
-        raw_motion = float(np.linalg.norm(keypoints - self.previous_keypoints))
-        self.previous_keypoints = keypoints.copy()
+        # --- raw motion (from persisted motion_kp — no zero-to-real spikes) ---
+        raw_motion = float(np.linalg.norm(motion_kp - self.previous_keypoints))
+        self.previous_keypoints = motion_kp.copy()
 
         # --- smooth the motion magnitude (not the keypoints) ---
-        # This damps jitter spikes while keeping the onset of real motion sharp.
         a = self.motion_smoothing
         if self.sign_frames > 1:
             self.smoothed_motion = a * self.smoothed_motion + (1.0 - a) * raw_motion
@@ -126,31 +141,25 @@ class MotionDetector:
             low_th = 0.1
             high_th = 0.4
 
-        # Use smoothed motion for hysteresis decisions
         motion = self.smoothed_motion
 
         # --- hysteresis state machine ---
         if motion < self.stillness_floor:
-            # Hard floor: guaranteed stillness detection
             self.still_counter += 1
         elif motion < low_th:
             self.still_counter += 1
         elif motion > high_th:
-            # During the fallback period (<10 frames) the thresholds are
-            # speculative — don't let noise reset the counter.
             if len(self.raw_motion_history) >= 10:
                 self.still_counter = 0
-        # hysteresis band: hold previous still_counter
 
-        # --- accumulate ---
-        self.current_sign_keypoints.append(keypoints.copy())
+        # --- accumulate raw keypoints (matching training data) ---
+        self.current_sign_keypoints.append(store_kp.copy())
         self.sign_frames += 1
 
         # --- sign boundary check ---
         if (self.still_counter >= self.still_frames_required
                 and self.sign_frames >= self.min_sign_duration):
             completed = [kp.copy() for kp in self.current_sign_keypoints]
-            # reset for next sign
             self.still_counter = 0
             self.sign_frames = 0
             self.current_sign_keypoints.clear()
