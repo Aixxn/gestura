@@ -22,7 +22,7 @@ app = FastAPI(title="Sign Segmentation Service")
 
 converter = Converter()
 motion_detector = MotionDetector(
-    low_factor=0.5,
+    low_factor=0.3,
     high_factor=2.0,
     still_frames_required=8,   # ~400 ms at 20 fps
     min_sign_duration=5,       # minimum sign length (noise filter)
