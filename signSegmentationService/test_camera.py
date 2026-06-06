@@ -222,7 +222,7 @@ def main() -> None:
     # ---- components ----
     converter = Converter()
     detector = MotionDetector(
-        low_factor=0.5,
+        low_factor=0.3,
         high_factor=2.0,
         still_frames_required=8,
         min_sign_duration=5,
