@@ -12,11 +12,8 @@
 **/__pycache__/
 **/.env
 **/.ipynb_checkpoints/
-<<<<<<< HEAD
 **/*.keras
 **/keypoint_data_*/
-=======
->>>>>>> 110ca8c8cb0e1902ad925e34c20ccfe13cc32b06
 
 
 # docker
