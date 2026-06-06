@@ -1,4 +1,7 @@
+import urllib.request
 import mediapipe as mp
+from mediapipe.tasks import python
+from mediapipe.tasks.python import vision
 import cv2 as cv
 import numpy as np
 import os
@@ -6,6 +9,24 @@ import os
 # Defaults – can be overridden via env vars
 WINDOW_SIZE = int(os.getenv("WINDOW_SIZE", "35"))
 FEATURE_DIM = int(os.getenv("FEATURE_DIM", "1662"))
+
+_MODEL_DIR = os.path.dirname(__file__)
+_MODEL_URL = (
+    "https://storage.googleapis.com/mediapipe-models/"
+    "holistic_landmarker/holistic_landmarker/float16/latest/"
+    "holistic_landmarker.task"
+)
+_MODEL_PATH = os.path.join(_MODEL_DIR, "holistic_landmarker.task")
+
+
+def _ensure_model() -> str:
+    """Download the holistic landmarker model if not present."""
+    if os.path.exists(_MODEL_PATH):
+        return _MODEL_PATH
+    print(f"[Converter] Downloading holistic_landmarker.task (~13 MB)...")
+    urllib.request.urlretrieve(_MODEL_URL, _MODEL_PATH)
+    print(f"[Converter] Model saved to {_MODEL_PATH}")
+    return _MODEL_PATH
 
 
 class Converter:
@@ -21,11 +42,23 @@ class Converter:
     """
 
     def __init__(self):
-        self.mp_model = mp.solutions.holistic.Holistic()
+        model_path = _ensure_model()
+        base_options = python.BaseOptions(model_asset_path=model_path)
+        options = vision.HolisticLandmarkerOptions(
+            base_options=base_options,
+            running_mode=vision.RunningMode.IMAGE,
+        )
+        self.landmarker = vision.HolisticLandmarker.create_from_options(options)
 
         # Fixed-size sliding window buffer
         self.window = np.zeros((WINDOW_SIZE, FEATURE_DIM), dtype=np.float32)
         self.current_length = 0  # how many real frames have been inserted
+
+        self._debug_image = None
+
+    def __del__(self):
+        if hasattr(self, 'landmarker'):
+            self.landmarker.close()
 
     # ------------------------------------------------------------------
     # Public API
@@ -44,14 +77,13 @@ class Converter:
         if cv_image is None:
             raise ValueError("Could not decode image bytes (corrupt data).")
 
-        image = cv.cvtColor(cv_image, cv.COLOR_BGR2RGB)
-        image.flags.writeable = False
+        image_rgb = cv.cvtColor(cv_image, cv.COLOR_BGR2RGB)
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=image_rgb)
 
-        results = self.mp_model.process(image)
-        keypoints = self._extract_keypoints(results)
+        detection_result = self.landmarker.detect(mp_image)
+        keypoints = self._extract_keypoints(detection_result)
 
-        image.flags.writeable = True
-        self._debug_image = cv.cvtColor(image, cv.COLOR_RGB2BGR)
+        self._debug_image = cv.cvtColor(image_rgb, cv.COLOR_RGB2BGR)
 
         if keypoints.shape != (FEATURE_DIM,):
             raise ValueError(
@@ -87,23 +119,41 @@ class Converter:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _extract_keypoints(results):
+    def _extract_keypoints(result) -> np.ndarray:
         """Flatten MediaPipe Holistic landmarks into a single vector."""
-        lh = np.array([[res.x, res.y, res.z]
-                       for res in results.left_hand_landmarks.landmark]).flatten() \
-             if results.left_hand_landmarks else np.zeros(21 * 3)
 
-        rh = np.array([[res.x, res.y, res.z]
-                       for res in results.right_hand_landmarks.landmark]).flatten() \
-             if results.right_hand_landmarks else np.zeros(21 * 3)
+        # Face landmarks (468 landmarks × 3 = 1404)
+        face = np.zeros(468 * 3, dtype=np.float32)
+        if result.face_landmarks:
+            for i, lm in enumerate(result.face_landmarks[0]):
+                face[i * 3] = lm.x
+                face[i * 3 + 1] = lm.y
+                face[i * 3 + 2] = lm.z
 
-        face = np.array([[res.x, res.y, res.z]
-                         for res in results.face_landmarks.landmark]).flatten() \
-               if results.face_landmarks else np.zeros(468 * 3)
+        # Left hand landmarks (21 × 3 = 63)
+        lh = np.zeros(21 * 3, dtype=np.float32)
+        if result.left_hand_landmarks:
+            for i, lm in enumerate(result.left_hand_landmarks[0]):
+                lh[i * 3] = lm.x
+                lh[i * 3 + 1] = lm.y
+                lh[i * 3 + 2] = lm.z
 
-        pose = np.array([[res.x, res.y, res.z, res.visibility]
-                         for res in results.pose_landmarks.landmark]).flatten() \
-                if results.pose_landmarks else np.zeros(33 * 4)
+        # Right hand landmarks (21 × 3 = 63)
+        rh = np.zeros(21 * 3, dtype=np.float32)
+        if result.right_hand_landmarks:
+            for i, lm in enumerate(result.right_hand_landmarks[0]):
+                rh[i * 3] = lm.x
+                rh[i * 3 + 1] = lm.y
+                rh[i * 3 + 2] = lm.z
+
+        # Pose landmarks (33 × 4 = 132; includes visibility)
+        pose = np.zeros(33 * 4, dtype=np.float32)
+        if result.pose_landmarks:
+            for i, lm in enumerate(result.pose_landmarks[0]):
+                pose[i * 4] = lm.x
+                pose[i * 4 + 1] = lm.y
+                pose[i * 4 + 2] = lm.z
+                pose[i * 4 + 3] = lm.visibility if hasattr(lm, 'visibility') else 0.0
 
         concat = np.concatenate([face, lh, rh, pose])
 
