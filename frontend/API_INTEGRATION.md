@@ -241,8 +241,7 @@ const WS_URL = __DEV__
 
 ### Images Not Processing
 
-- Check Kafka is running: `docker compose logs kafka`
-- Verify imageToVectorWorker is running: `docker compose logs imageToVectorWorker`
+- Check translationService is running: `docker compose logs translationService`
 - Check image format is correct (JPEG/PNG)
 
 ## Files Created

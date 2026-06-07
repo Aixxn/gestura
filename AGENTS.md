@@ -4,17 +4,16 @@
 
 **Gestura** is a gesture recognition platform with:
 - **Frontend**: Expo React Native app (camera capture, sign language recognition)
-- **Backend Services**: Multiple TypeScript/Python microservices + Python ML pipeline
-- **Services**: API Gateway, Authentication Service, Translation Service, Sign Segmentation Service, ML Model
-- **Infrastructure**: Docker Compose (Redis for session storage)
+- **Backend Services**: TypeScript/Python microservices + Python ML pipeline
+- **Services**: API Gateway, Authentication Service, Translation Service (merged with sign segmentation), ML Model
+- **Infrastructure**: Docker Compose
 
 ### Directory Layout
 
 ```
 apiGateway/          → Express.js API gateway (Node.js, TypeScript)
 frontend/            → Expo app with file-based routing (React Native)
-translationService/  → FastAPI service for ASL-to-English translation (Python)
-signSegmentationService/ → Service for real-time sign boundary detection (Python)
+translationService/  → FastAPI service for gesture translation (segmentation + ML + Groq) (Python)
 model/               → ML model training & inference (Python + Keras)
 authenticationService/ → Currently empty/placeholder
 ```
@@ -77,7 +76,7 @@ npm test            # Run Mocha tests (timeout 5000ms)
 ```
 WEB_SOCKET_HOST = "0.0.0.0"
 WEB_SOCKET_PORT = 9898
-SEGMENTATION_SERVICE_URL = "http://signsegmentationservice:8000"
+TRANSLATION_SERVICE_URL = "http://translationService:7860"
 ```
 
 **Gotchas**:
@@ -89,7 +88,7 @@ SEGMENTATION_SERVICE_URL = "http://signsegmentationservice:8000"
 
 ## Translation Service (FastAPI + Python)
 
-**Tech**: FastAPI, Keras/TensorFlow, Groq LLM API (for ASL grammar correction)
+**Tech**: FastAPI, Keras/TensorFlow, MediaPipe Holistic, Groq LLM API (for ASL grammar correction)
 
 ### Development
 ```bash
@@ -99,48 +98,31 @@ uvicorn main:app --host 0.0.0.0 --port 7860 --reload
 ```
 
 **Key Functionality**:
-- Accepts batch of sign sequences and returns translated words
-- Uses Groq LLM API (llama-3.3-70b) to fix grammar
+- Sign segmentation via MediaPipe Holistic (keypoint extraction + motion boundary detection)
+- Real-time ML inference: when a sign ends, immediately predicts the word
+- Buffers predicted words per session
+- Uses Groq LLM API (llama-3.3-70b) to fix grammar on session end
 - FastAPI debug mode enabled in `main.py`
+
+**Key Components**:
+- `main.py` → FastAPI server with session management
+- `converter.py` → MediaPipe keypoint extraction, nose-normalization, hand persistence
+- `motion_detector.py` → Hysteresis-based sign boundary detection
+- `normalize.py` → Variable-length sign normalization to model's window size
+
+**Endpoints**:
+- `POST /process-frame` → Receive frame, run segmentation + ML inference
+- `POST /stop` → Finalize session, run Groq grammar correction
+- `POST /translate` → Standalone ML inference on pre-normalized window
+- `POST /convert-sentence` → Standalone Groq grammar fix
+- `GET /health` → Health check
 
 **Environment** (`.env`):
 - `GROQ_API_KEY` required for LLM integration
+- `FEATURE_DIM=258` (hands + pose, no face)
+- `WINDOW_SIZE=35` (model expects 35-frame input windows)
 
 **Port**: 7860 (FastAPI default)
-
----
-
-## Sign Segmentation Service (Python + MediaPipe)
-
-**Tech**: Python 3.9, FastAPI, MediaPipe for keypoint extraction, hysteresis-based motion detection
-
-### Development
-```bash
-cd signSegmentationService
-pip install -r requirements.txt
-uvicorn main:app --host 0.0.0.0 --port 8000 --reload
-```
-
-**Key Functionality**:
-- Receives video frames via HTTP POST
-- Extracts keypoints using MediaPipe Holistic
-- Tracks hand motion with hysteresis and adaptive thresholding
-- Detects sign boundaries when motion falls below threshold for N frames
-- Emits sign-level results (keypoint sequence for each detected sign)
-- Buffers signs internally until a sign ends, then returns the completed sign
-
-**Key Components**:
-- `main.py` → FastAPI server with endpoints
-- `motion_detector.py` → Core logic with hysteresis and adaptive threshold
-- `converter.py` → MediaPipe keypoint extraction (shared with legacy code)
-
-**Endpoints**:
-- `POST /process-frame` → Process a single frame, returns sign data when a sign ends
-- `GET /health` → Health check
-
-**Environment**: No special environment variables required
-
-**Port**: 8000 (FastAPI default)
 
 ---
 
@@ -185,24 +167,18 @@ pytest test_main.py     # Run tests
 **Services**:
 - `apigateway` → Node.js server, ports 8080 (API), 9898 (WebSocket)
 - `translationService` → Python FastAPI service (port 7860)
-- `signSegmentationService` → Python FastAPI service (port 8000)
-- `redis` → Cache/session store (port 6379)
+- `mongodb` → MongoDB for auth
 
 ### Local Development
 ```bash
-docker-compose up -d
-docker-compose logs -f apigateway
-docker-compose down
+docker compose up -d
+docker compose logs -f apigateway
+docker compose down
 ```
-
-**Redis Setup**:
-- Used for session storage in API Gateway (optional, can be in-memory)
-- Single instance, no replication needed for MVP
 
 **Image Names** (for CI/CD):
 - `baronocasiones/gestura-apigateway:dev`
 - `baronocasiones/gestura-translationservice:dev`
-- `baronocasiones/gestura-signsegmentationservice:dev`
 
 ---
 
@@ -231,11 +207,7 @@ cd translationService
 uvicorn main:app --host 0.0.0.0 --port 7860 --reload
 ```
 
-### Sign Segmentation Service
-```bash
-cd signSegmentationService
-uvicorn main:app --host 0.0.0.0 --port 8000 --reload
-```
+
 
 ### Model
 ```bash
@@ -252,7 +224,7 @@ pytest test_main.py
 ```
 WEB_SOCKET_HOST=0.0.0.0
 WEB_SOCKET_PORT=9898
-SEGMENTATION_SERVICE_URL=http://signsegmentationservice:8000
+TRANSLATION_SERVICE_URL=http://translationService:7860
 ```
 
 ### Frontend (`.env`)
@@ -269,10 +241,9 @@ FIREBASE_MEASUREMENT_ID=...
 ### Translation Service (`.env`)
 ```
 GROQ_API_KEY=...
+FEATURE_DIM=258
+WINDOW_SIZE=35
 ```
-
-### Sign Segmentation Service
-- No required environment variables (uses defaults)
 
 ---
 
@@ -291,10 +262,10 @@ cd model
 pytest test_main.py
 ```
 
-### Sign Segmentation Service
+### Translation Service
 ```bash
-cd signSegmentationService
-pytest test_main.py   # Add tests as needed
+cd translationService
+pytest test_main.py -v
 ```
 
 ---
@@ -316,14 +287,14 @@ pytest test_main.py   # Add tests as needed
    - Verify MediaPipe/OpenCV are installed: `pip list | grep -E "mediapipe|opencv"`
 
 4. **Service Connection Errors**
-   - Docker Compose must be running: `docker-compose up -d`
-   - Use service names as hostnames (e.g., `signsegmentationservice:8000`)
-   - Check dependent services are healthy: `docker-compose ps`
+   - Docker Compose must be running: `docker compose up -d`
+   - Use service names as hostnames (e.g., `translationService:7860`)
+   - Check dependent services are healthy: `docker compose ps`
 
 5. **Python Service Dependency Conflicts**
-   - Each service has its own `requirements.txt`
-   - Use separate venvs: `.venv` per service or `--prefix` flag
-   - TensorFlow + Keras are heavy; use Python 3.9–3.13 (see Dockerfiles)
+   - Translation Service has its own `requirements.txt`
+   - Use separate venv: `.venv` per service or `--prefix` flag
+   - TensorFlow + Keras are heavy; use Python 3.12 (see Dockerfile)
 
 6. **Frontend Camera Permissions**
    - Android: `app.json` already requests `android.permission.CAMERA`
@@ -331,7 +302,7 @@ pytest test_main.py   # Add tests as needed
    - Emulator: May need to grant permissions in settings
 
 7. **Sign Segmentation Tuning**
-   - Adjust `low_factor`, `high_factor`, `still_frames_required` in `motion_detector.py`
+   - Adjust `low_factor`, `high_factor`, `still_frames_required` in `translationService/motion_detector.py`
    - Default values work for ~30fps video with moderate signing speed
    - Increase `still_frames_required` for slower signing or noisy backgrounds
    - Decrease for faster signing (but risk false positives)
@@ -344,12 +315,11 @@ pytest test_main.py   # Add tests as needed
 - **Inter-Service Communication**: HTTP/REST for all service-to-service calls
 - **File Routing**: Frontend uses Expo Router with files in `frontend/app/` (not config-based)
 - **TypeScript Path Aliases**: API Gateway uses `@src/*` → relative paths (resolved at compile time)
-- **ML Model Inference**: Served via separate Python service; not embedded in API Gateway
+- **ML Model Inference**: Served via Translation Service; segmentation + ML + Groq in one pipeline
 - **WebSocket**: Separate port (9898) for real-time client communication
 - **State Management**: 
-  - API Gateway holds session state (UUID → WebSocket, buffered signs)
-  - Sign Segmentation Service holds per-frame motion state only (no session data)
-  - Translation Service is stateless (accepts signs, returns translations)
+  - API Gateway holds session WebSocket connections only (no sign buffering)
+  - Translation Service holds all per-session state (motion detector, accumulated predicted words)
 
 ---
 
@@ -357,6 +327,5 @@ pytest test_main.py   # Add tests as needed
 
 - **Docker Images**: All services have Dockerfiles; push to `baronocasiones/*` registry
 - **API Endpoints**: Hardcoded in `frontend/app.json`; must be updated for production IP/domain
-- **Redis**: Used for optional session persistence; can be removed for in-memory MVP
-- **Model File**: Must be available at runtime in `model/model.keras`
-- **Service Order**: Start translationService and signSegmentationService before API Gateway for best results
+- **Model File**: Must be available at runtime in `translationService/model.keras`
+- **Service Order**: Start translationService before API Gateway for best results

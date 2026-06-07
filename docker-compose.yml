@@ -15,20 +15,20 @@ services:
     restart: always
     depends_on:
       - mongodb
-      - signSegmentationService
+      - translationService
     environment:
       - MONGODB_URI=mongodb://mongodb:27017
-      - SEGMENTATION_SERVICE_URL=http://signsegmentationservice:8000
+      - TRANSLATION_SERVICE_URL=http://translationService:7860
       - WEB_SOCKET_HOST=0.0.0.0
       - WEB_SOCKET_PORT=9898
 
-  signSegmentationService:
-    image: baronocasiones/gestura-signsegmentationservice:dev
+  translationService:
+    image: baronocasiones/gestura-translationservice:dev
     build:
-      context: ./signSegmentationService
+      context: ./translationService
       dockerfile: Dockerfile
     ports:
-      - "8000:8000"
+      - "7860:7860"
     restart: always
 
 volumes:
