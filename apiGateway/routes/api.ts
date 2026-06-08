@@ -1,70 +1,20 @@
 import express from "express";
-import { Kafka } from 'kafkajs';
 import multer from 'multer';
-import { WebSocketServer, WebSocket } from 'ws'
+import { WebSocketServer } from 'ws'
+import axios from 'axios';
 
-const WEB_SOCKET_HOST = '0.0.0.0';
-const WEB_SOCKET_PORT = 9898;
-const KAFKA_BROKER = process.env.KAFKA_BROKER || 'kafka:9092';
+const WEB_SOCKET_HOST = process.env.WEB_SOCKET_HOST || '0.0.0.0';
+const WEB_SOCKET_PORT = parseInt(process.env.WEB_SOCKET_PORT || '9898');
+const TRANSLATION_SERVICE_URL = process.env.TRANSLATION_SERVICE_URL || 'http://translationService:7860';
 
-
-const router = express.Router();
-const kafka = new Kafka({ clientId: 'rawImageProducer', brokers: [ KAFKA_BROKER ] });
-const producer = kafka.producer({maxInFlightRequests: 1});
-const consumer = kafka.consumer({ groupId: 'translatedSignConsumer' });
+const translationRouter = express.Router();
 const wss = new WebSocketServer({ host: WEB_SOCKET_HOST, port: WEB_SOCKET_PORT });
-const sessionMap = new Map();
+const sessionMap = new Map(); // Maps UUID to WebSocket
 
 const upload = multer();
 
-// kafka
-(async () => {
-    try {
-        await producer.connect();
-        console.log('Kafka producer connected successfully.')
-    } catch (e) {
-        console.error('Failed to connect Kafka producer:', e);
-    }
-})();
-
-(async () => {
-    try {
-        await consumer.connect();
-        await consumer.subscribe({ topic: 'translatedSign', fromBeginning: true });
-        console.log('Kafka consumer connected successfully.');
-
-        await consumer.run({
-            eachMessage: async ({ message }) => {
-                const resultKey = message.key ? message.key.toString() : null;
-                const resultValue = message.value ? message.value.toString() : null;
-
-                if (!resultKey) {
-                    console.error('Message received does not have a Key.');
-                    return;
-                }
-                if (!resultValue) {
-                    console.error('Message received does not have a value.');
-                    return;
-                }
-
-                const targetWs: WebSocket = sessionMap.get(resultKey);
-
-                if (targetWs && targetWs.readyState == targetWs.OPEN) {
-                    targetWs.send(resultValue);
-                    console.log(`Pushed result for ${resultKey} to WebSocket`);
-                } else{
-                    console.warn(`No active socket found for result: ${resultKey}`);
-                }
-            }
-        });
-    } catch (e) {
-        console.error('Failed to connect Kafka consumer.');
-    }
-});
-
-// websocket server
+// websocket server — tracks active sessions for stop endpoint
 wss.on('connection', async (ws, req) => {
-
     const urlParams = new URLSearchParams(req.url?.split('?')[1]);
     const clientUuid = urlParams.get('uuid');
 
@@ -83,8 +33,9 @@ wss.on('connection', async (ws, req) => {
 });
 
 // endpoints
-router.get('/stop/:uuid', async (req, res) => {
+translationRouter.get('/stop/:uuid', async (req, res) => {
     const uuid = req.params.uuid;
+    const ws = sessionMap.get(uuid);
 
     if (!uuid) {
         console.error('No uuid sent.')
@@ -92,22 +43,37 @@ router.get('/stop/:uuid', async (req, res) => {
         return
     }
 
+    if (!ws) {
+        res.status(404).send({ message: 'No active session for this UUID.' });
+        return;
+    }
+
     try {
-        await producer.send({
-            topic: 'rawImageData',
-            messages: [{
-                key: String(uuid),
-                value: 'stop'
-            }]
-        })
+        const response = await axios.post(
+            `${TRANSLATION_SERVICE_URL}/stop`,
+            { uuid },
+            { timeout: 15000 }
+        );
+
+        const result = {
+            type: 'translation',
+            asl_gloss: response.data.asl_gloss || '',
+            english: response.data.english || '',
+            words: response.data.words || [],
+        };
+
+        if (ws.readyState === ws.OPEN) {
+            ws.send(JSON.stringify(result));
+        }
+
         res.status(200).send('Successfully finished sequence.');
     } catch (e) {
         console.error('Error:', e);
-        res.status(500).send({ message: 'Failed to stop processing.' });
+        res.status(500).send({ message: 'Failed to process sequence.' })
     }
 });
 
-router.post('/convert', upload.single('rawImage'), async (req, res) => {
+translationRouter.post('/convert', upload.single('rawImage'), async (req, res) => {
     const file = req.file
     const uuid = req.body.uuid
 
@@ -123,18 +89,23 @@ router.post('/convert', upload.single('rawImage'), async (req, res) => {
     }
 
     try {
-        await producer.send({
-            topic: 'rawImageData',
-            messages: [{
-                key: String(uuid),
-                value: file.buffer,
-            }]
-        });
-        res.status(200).send({ message: 'image received and queued.' });
+        const imageBase64 = file.buffer.toString('base64');
+
+        const response = await axios.post(
+            `${TRANSLATION_SERVICE_URL}/process-frame`,
+            {
+                uuid: uuid,
+                image_bytes: imageBase64,
+                timestamp_ms: Date.now()
+            },
+            { timeout: 5000 }
+        );
+
+        res.status(200).send(response.data);
     } catch (e) {
-        console.error('Error failed to send data to kafka broker:', e)
-        res.status(500).send({ message: 'Failed to proccess image. ' })
+        console.error('Error failed to send data to translation service:', e)
+        res.status(500).send({ message: 'Failed to process image. ' })
     }
 });
 
-export default router;
+export default translationRouter;

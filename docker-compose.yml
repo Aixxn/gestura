@@ -1,4 +1,12 @@
 services:
+  mongodb:
+    image: mongo:7.0
+    ports:
+      - "27017:27017"
+    restart: always
+    volumes:
+      - mongodb_data:/data/db
+
   apigateway:
     image: baronocasiones/gestura-apigateway:dev
     ports: 
@@ -6,40 +14,22 @@ services:
       - "9898:9898"
     restart: always
     depends_on:
-      - kafka
-
-  imageToVectorWorker:
-    image: baronocasiones/gestura-imagetovectorworker:dev
-    restart: always
-    depends_on:
-      - kafka
-      - redis
-
-  kafka:
-    image: wurstmeister/kafka:latest
-    ports:
-      - "9092:9092"
-    restart: always
+      - mongodb
+      - translationService
     environment:
-      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_LISTENERS: INSIDE://0.0.0.0:9092,OUTSIDE://0.0.0.0:9093
-      KAFKA_ADVERTISED_LISTENERS: INSIDE://kafka:9092,OUTSIDE://localhost:9093
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INSIDE:PLAINTEXT,OUTSIDE:PLAINTEXT
-      KAFKA_INTER_BROKER_LISTENER_NAME: INSIDE
-      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-      KAFKA_MESSAGE_MAX_BYTES: 2097152
-    depends_on:
-    - zookeeper
+      - MONGODB_URI=mongodb://mongodb:27017
+      - TRANSLATION_SERVICE_URL=http://translationService:7860
+      - WEB_SOCKET_HOST=0.0.0.0
+      - WEB_SOCKET_PORT=9898
 
-  zookeeper:
-    image: wurstmeister/zookeeper:latest
-    restart: always
+  translationService:
+    image: baronocasiones/gestura-translationservice:dev
+    build:
+      context: ./translationService
+      dockerfile: Dockerfile
     ports:
-      - "2181:2181"
-
-  redis:
-    image: redis:6.2.20
+      - "7860:7860"
     restart: always
-    ports:
-      - "6379:6379"
 
+volumes:
+  mongodb_data:

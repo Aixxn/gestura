@@ -1,38 +1,32 @@
-from fastapi import FastAPI
-from pydantic import BaseModel, Field
+import os
+import base64
 import numpy as np
 import keras
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel, Field
+from typing import Optional
 from groq import Groq
-import os
 from dotenv import load_dotenv
-from typing import List, Tuple
+from converter import Converter, FEATURE_DIM, WINDOW_SIZE
+from motion_detector import MotionDetector
+from normalize import normalize_frames
 
-# Load environment variables from .env file
 load_dotenv()
 
 app = FastAPI(
-        debug=True, 
-        title='Translator Service', 
-        description='This service is responsible for servicing\
-                the translator AI model.'
-        )
-# Request/Response Models
-class ConvertSentenceRequest(BaseModel):
-    asl_gloss: str
+    debug=True,
+    title='Gesture Translation Service',
+    description='Combined sign segmentation + ASL translation + Groq grammar correction',
+)
 
-class ConvertSentenceResponse(BaseModel):
-    original: str
-    translated: str
-    success: bool
-    error: str | None = None
+# ---------------------------------------------------------------------------
+# ASL Grammar Fixer (unchanged)
+# ---------------------------------------------------------------------------
 
-
-# ASL Grammar Fixer Class
 class ASLGrammarFixer:
     def __init__(self, api_key: str = None):
         self.client = Groq(api_key=api_key or os.getenv("GROQ_API_KEY"))
         self.model = "llama-3.3-70b-versatile"
-        
         self.system_prompt = """You are an expert in American Sign Language (ASL) grammar conversion.
 Convert ASL gloss text (space-separated signs) into natural, grammatically correct English.
 
@@ -50,7 +44,6 @@ ASL: "YOU LIKE COFFEE?" → "Do you like coffee?"
 """
 
     def fix_grammar(self, asl_gloss: str) -> str:
-        """Convert ASL gloss to natural English"""
         try:
             response = self.client.chat.completions.create(
                 model=self.model,
@@ -58,7 +51,7 @@ ASL: "YOU LIKE COFFEE?" → "Do you like coffee?"
                     {"role": "system", "content": self.system_prompt},
                     {"role": "user", "content": f"Convert to English: {asl_gloss}"}
                 ],
-                temperature=0.3,  # Lower = more consistent
+                temperature=0.3,
                 max_tokens=100
             )
             return response.choices[0].message.content.strip()
@@ -66,102 +59,226 @@ ASL: "YOU LIKE COFFEE?" → "Do you like coffee?"
             print(f"LLM Error: {e}")
             raise e
 
-
-# Initialize the grammar fixer (singleton)
 grammar_fixer = ASLGrammarFixer()
 
-# Load your .keras model (replace 'your_model.keras' with your actual model file)
-# It's best practice to load the model outside the path operation function
-# to avoid reloading it on every request.
+# ---------------------------------------------------------------------------
+# ML Model (optional — graceful fallback if not present)
+# ---------------------------------------------------------------------------
+
+MODEL_WINDOW_SIZE = WINDOW_SIZE  # 35 — same as segmentation's sliding window
+
 try:
     model = keras.models.load_model('model.keras')
+    print(f"[TranslationService] Model loaded (output classes: {model.output_shape[-1]})")
 except Exception as e:
-    print(f"Error loading model: {e}")
-    model = None # Handle this gracefully in a real app
+    print(f"[TranslationService] No model loaded ({e}) — using fallback predictions")
+    model = None
 
-# Define the expected input shape
-WINDOW_SIZE = 80
-FEATURE_DIM = 1663
-NUM_CLASSES = model.output_shape[-1] if model else 30 # Adjust as needed
-
-# --- Pydantic Data Model ---
-
-# The request body will contain a list of lists, representing the (80, 1663) array
-# We use List[List[float]] to enforce the structure for Pydantic's validation
-class WindowInput(BaseModel):
-    # Using Field for a clearer description in the auto-generated docs (Swagger/ReDoc)
-    window_data: List[List[float]] = Field(
-        ...,
-        example=[[0.1] * FEATURE_DIM] * WINDOW_SIZE, # A sample (80, 1663)
-        description=f"A list of {WINDOW_SIZE} lists, where each inner list has {FEATURE_DIM} float elements."
-    )
-    
-    # Custom validator to check the shape after Pydantic validates types (optional but highly recommended)
-    # The actual shape check will be done after conversion to numpy inside the endpoint
-    
-# --- Model Mapping (Replace with your actual word list) ---
-# This list maps the class index (output from the model) back to a word.
-# Ensure this list's length matches the NUM_CLASSES of your model.
+NUM_CLASSES = model.output_shape[-1] if model else 30
 WORD_MAPPING = [f"word_{i}" for i in range(NUM_CLASSES)]
 
+# ---------------------------------------------------------------------------
+# Segmentation pipeline (singletons)
+# ---------------------------------------------------------------------------
 
-# API Endpoints
+converter = Converter()
+motion_detector = MotionDetector(
+    low_factor=0.5,
+    high_factor=4.0,
+    still_frames_required=8,
+    min_sign_duration=5,
+    history_size=30,
+    feature_dim=FEATURE_DIM,
+    motion_smoothing=0.6,
+    stillness_floor=0.3,
+)
+
+# ---------------------------------------------------------------------------
+# Session state
+# ---------------------------------------------------------------------------
+
+session_states: dict = {}
+
+# ---------------------------------------------------------------------------
+# Request / response models
+# ---------------------------------------------------------------------------
+
+class FrameRequest(BaseModel):
+    uuid: str
+    image_bytes: str
+    timestamp_ms: Optional[int] = None
+
+class FrameResponse(BaseModel):
+    status: str
+    word: Optional[str] = None
+    sign_index: Optional[int] = None
+
+class StopRequest(BaseModel):
+    uuid: str
+
+class StopResponse(BaseModel):
+    asl_gloss: str
+    english: str
+    words: list[str]
+    success: bool
+
+class ConvertSentenceRequest(BaseModel):
+    asl_gloss: str
+
+class ConvertSentenceResponse(BaseModel):
+    original: str
+    translated: str
+    success: bool
+    error: str | None = None
+
+class WindowInput(BaseModel):
+    window_data: list[list[float]] = Field(
+        ...,
+        example=[[0.1] * FEATURE_DIM] * MODEL_WINDOW_SIZE,
+    )
+
+# ---------------------------------------------------------------------------
+# Helper: run ML inference on a completed sign
+# ---------------------------------------------------------------------------
+
+def _predict_word(keypoints_sequence: list[list[float]]) -> str:
+    normalized = normalize_frames(keypoints_sequence, MODEL_WINDOW_SIZE)
+    if model is None:
+        return "sign_detected"
+    window_np = np.array(normalized, dtype=np.float32)
+    inp = window_np[np.newaxis, ...]
+    probs = model.predict(inp, verbose=0)
+    idx = int(np.argmax(probs[0]))
+    if idx >= len(WORD_MAPPING):
+        return "unknown"
+    return WORD_MAPPING[idx]
+
+# ---------------------------------------------------------------------------
+# Endpoints
+# ---------------------------------------------------------------------------
+
+@app.post("/process-frame")
+async def process_frame(request: FrameRequest):
+    try:
+        raw_bytes = base64.b64decode(request.image_bytes)
+        keypoints = converter.point_detection(raw_bytes)
+        persisted = converter.get_persisted_keypoints()
+        converter.process_new_frame(keypoints)
+
+        session = session_states.setdefault(request.uuid, {
+            "motion_detector": MotionDetector(
+                low_factor=0.5,
+                high_factor=4.0,
+                still_frames_required=8,
+                min_sign_duration=5,
+                history_size=30,
+                feature_dim=FEATURE_DIM,
+                motion_smoothing=0.6,
+                stillness_floor=0.3,
+            ),
+            "predicted_words": [],
+            "sign_count": 0,
+        })
+
+        md = session["motion_detector"]
+        sign_ended, completed_sign = md.update(persisted, keypoints)
+
+        if sign_ended and completed_sign is not None:
+            kp_list = [kp.tolist() for kp in completed_sign]
+            word = _predict_word(kp_list)
+            sign_idx = session["sign_count"]
+            session["sign_count"] += 1
+            session["predicted_words"].append(word)
+            return FrameResponse(
+                status="word_detected",
+                word=word,
+                sign_index=sign_idx,
+            )
+
+        return FrameResponse(status="processing")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/stop")
+async def stop_session(request: StopRequest):
+    session = session_states.pop(request.uuid, None)
+    if not session:
+        raise HTTPException(status_code=404, detail="No active session")
+
+    words = session["predicted_words"]
+    if not words:
+        return StopResponse(
+            asl_gloss="",
+            english="",
+            words=[],
+            success=True,
+        )
+
+    asl_gloss = " ".join(words)
+    try:
+        english = grammar_fixer.fix_grammar(asl_gloss)
+        return StopResponse(
+            asl_gloss=asl_gloss,
+            english=english,
+            words=words,
+            success=True,
+        )
+    except Exception as e:
+        return StopResponse(
+            asl_gloss=asl_gloss,
+            english=asl_gloss,
+            words=words,
+            success=False,
+            error=str(e),
+        )
+
+
 @app.post("/translate")
 async def translate(data: WindowInput):
-    """
-    Takes an (80, 1663) array of floats and returns a predicted word.
-    """
     if model is None:
         return {"error": "Model not loaded"}, 500
 
-    # 1. Extract the list of lists from the Pydantic model
     window_list = data.window_data
-
-    # 2. Convert the list of lists to a numpy array
     try:
         window_np = np.array(window_list)
     except ValueError:
-        # This would catch issues if the inner lists aren't all the same length
         return {"error": "Input data structure is not uniform."}, 422
-    
-    # 3. Check for the correct shape
-    if window_np.shape != (WINDOW_SIZE, FEATURE_DIM):
-        return {"error": f"Incorrect array shape. Expected ({WINDOW_SIZE}, {FEATURE_DIM}), but got {window_np.shape}."}, 422
 
-    # 4. Apply the necessary data type conversion and add batch dimension
-    # window_np shape -> (WINDOW_SIZE, FEATURE_DIM)
-    inp = window_np.astype(np.float32)[np.newaxis, ...]  # (1, W, D)
+    if window_np.shape != (MODEL_WINDOW_SIZE, FEATURE_DIM):
+        return {"error": f"Incorrect shape. Expected ({MODEL_WINDOW_SIZE}, {FEATURE_DIM}), got {window_np.shape}."}, 422
 
-    # 5. Model Prediction
-    probs = model.predict(inp, verbose=0)  # (1, num_classes)
-    
-    # 6. Get the predicted class index (word index)
-    predicted_index = np.argmax(probs[0])
+    inp = window_np.astype(np.float32)[np.newaxis, ...]
+    probs = model.predict(inp, verbose=0)
+    predicted_index = int(np.argmax(probs[0]))
 
-    # 7. Map the index back to a word
     if predicted_index >= len(WORD_MAPPING):
-        # This handles a potential mismatch between model output size and your word list
         return {"error": "Prediction index out of bounds for word mapping."}, 500
-        
-    predicted_word = WORD_MAPPING[predicted_index]
 
-    # 8. Return the word as the API response
-    return {'pred': predicted_word}
+    return {"pred": WORD_MAPPING[predicted_index]}
 
-@app.post('/convert-sentence', response_model=ConvertSentenceResponse)
+
+@app.post("/convert-sentence", response_model=ConvertSentenceResponse)
 async def convert_sentence(request: ConvertSentenceRequest):
-    """Convert ASL gloss to natural English grammar"""
     try:
         translated = grammar_fixer.fix_grammar(request.asl_gloss)
         return ConvertSentenceResponse(
             original=request.asl_gloss,
             translated=translated,
-            success=True
+            success=True,
         )
     except Exception as e:
         return ConvertSentenceResponse(
             original=request.asl_gloss,
-            translated=request.asl_gloss,  # Return original on error
+            translated=request.asl_gloss,
             success=False,
-            error=str(e)
+            error=str(e),
         )
+
+
+@app.get("/health")
+async def health():
+    return {"status": "healthy", "service": "gesture-translation"}

@@ -2,7 +2,8 @@ import createError from 'http-errors';
 import express, {Request, Response, NextFunction} from 'express';
 import cookieParser from 'cookie-parser';
 import logger from 'morgan';
-import router from 'routes/api';
+import translationRouter from 'routes/api';
+import authRouter from 'routes/auth';
 
 const app = express();
 
@@ -12,7 +13,8 @@ app.use(express.urlencoded({ extended: false }));
 app.use(cookieParser());
 
 // enpoints/routes
-app.use('/api', router);
+app.use('/api', translationRouter);
+app.use('/api/auth', authRouter);
 
 // catch 404 and forward to error handler
 app.use((_req: Request, _res: Response, next: NextFunction) => {

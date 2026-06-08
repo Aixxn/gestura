@@ -1,5 +1,8 @@
 # Learn more https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files
 
+#logs 
+**/*.logs
+
 # dependencies
 **/node_modules/
 
@@ -12,13 +15,13 @@
 **/__pycache__/
 **/.env
 **/.ipynb_checkpoints/
-<<<<<<< HEAD
 **/*.keras
 **/keypoint_data_*/
-=======
->>>>>>> 110ca8c8cb0e1902ad925e34c20ccfe13cc32b06
 
 
 # docker
 **/Dockerfile
 **/.dockerignore
+
+# mediapipe model files (downloaded at runtime)
+**/*.task

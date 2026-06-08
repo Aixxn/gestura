@@ -212,7 +212,7 @@ export const cameraStyles = StyleSheet.create({
   translationText: {
     fontSize: 40,
     lineHeight: 22,
-    color: COLORS.black,
+    color: COLORS.white,
     textAlign: 'left',
   },
   placeholderText: {
