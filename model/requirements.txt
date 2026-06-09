@@ -1,19 +1,21 @@
-# Core ML Frameworks
-tensorflow>=2.16.1,<2.17
-keras>=3.0.0
-mediapipe==0.10.21
-jax
-jaxlib
-
-# Data & Processing
-numpy>=1.23,<2.0
-opencv-contrib-python>=4.8.0
-scipy
-protobuf>=4.25.3,<5.0.0
-ml-dtypes>=0.3.1,<0.4.0
-
-# Utilities
-absl-py
-matplotlib
-requests
-rich
+beautifulsoup4==4.15.0
+certifi==2026.5.20
+charset-normalizer==3.4.7
+click==8.4.1
+defusedxml==0.7.1
+flatbuffers==25.12.19
+idna==3.18
+magika==0.6.3
+markdownify==1.2.2
+markitdown==0.1.6
+numpy==2.4.6
+onnxruntime==1.26.0
+opencv-python==4.13.0.92
+packaging==26.2
+protobuf==7.35.0
+python-dotenv==1.2.2
+requests==2.34.2
+six==1.17.0
+soupsieve==2.8.4
+typing_extensions==4.15.0
+urllib3==2.7.0
