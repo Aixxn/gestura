@@ -1,0 +1,35 @@
+services:
+  mongodb:
+    image: mongo:7.0
+    ports:
+      - "27017:27017"
+    restart: always
+    volumes:
+      - mongodb_data:/data/db
+
+  apigateway:
+    image: baronocasiones/gestura-apigateway:dev
+    ports: 
+      - "8080:8080"
+      - "9898:9898"
+    restart: always
+    depends_on:
+      - mongodb
+      - translationService
+    environment:
+      - MONGODB_URI=mongodb://mongodb:27017
+      - TRANSLATION_SERVICE_URL=http://translationService:7860
+      - WEB_SOCKET_HOST=0.0.0.0
+      - WEB_SOCKET_PORT=9898
+
+  translationService:
+    image: baronocasiones/gestura-translationservice:dev
+    build:
+      context: ./translationService
+      dockerfile: Dockerfile
+    ports:
+      - "7860:7860"
+    restart: always
+
+volumes:
+  mongodb_data:
