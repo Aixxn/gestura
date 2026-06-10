@@ -93,7 +93,11 @@ def extract_video(video_path: str, converter: Converter) -> np.ndarray | None:
         if not ret:
             break
         try:
-            kp = converter.extract_from_frame(frame)
+            # Encode to JPEG and use point_detection (production-proven path)
+            ret, jpeg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+            if not ret:
+                continue
+            kp = converter.point_detection(jpeg.tobytes())
         except Exception as e:
             print(f"  ⚠️  Frame error in {video_path}: {e}")
             continue
