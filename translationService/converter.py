@@ -122,6 +122,9 @@ class Converter:
             raise ValueError("Could not decode image bytes (corrupt data).")
 
         image_rgb = cv.cvtColor(cv_image, cv.COLOR_BGR2RGB)
+        # Ensure contiguous memory layout — mp.Image can choke on
+        # non-contiguous views returned by cv.cvtColor.
+        image_rgb = np.ascontiguousarray(image_rgb)
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=image_rgb)
 
         detection_result = self.landmarker.detect(mp_image)
@@ -143,6 +146,9 @@ class Converter:
         round trip.  Useful for offline data extraction from video files.
         """
         image_rgb = cv.cvtColor(cv_image, cv.COLOR_BGR2RGB)
+        # Ensure contiguous memory layout — mp.Image can choke on
+        # non-contiguous views returned by cv.cvtColor.
+        image_rgb = np.ascontiguousarray(image_rgb)
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=image_rgb)
 
         detection_result = self.landmarker.detect(mp_image)
