@@ -58,9 +58,13 @@ class Converter:
         final = conv.stop()                                # current window snapshot
     """
 
-    def __init__(self):
+    def __init__(self, use_gpu: bool = False):
         model_path = _ensure_model()
-        base_options = python.BaseOptions(model_asset_path=model_path)
+        delegate = python.BaseOptions.Delegates.GPU if use_gpu else python.BaseOptions.Delegates.CPU
+        base_options = python.BaseOptions(
+            model_asset_path=model_path,
+            delegate=delegate,
+        )
         options = vision.HolisticLandmarkerOptions(
             base_options=base_options,
             running_mode=vision.RunningMode.IMAGE,
