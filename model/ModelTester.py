@@ -1,10 +1,39 @@
+#!/usr/bin/env python3
+"""
+Live ASL inference with bounded persistence.
+
+Uses the same nose-normalised, bounded-persistence keypoint extraction as the
+production converter (translationService/converter.py) so that live webcam
+inference matches training data format exactly.
+
+Bounded persistence: when MediaPipe briefly loses a hand (flicker), the
+last-known landmark positions are reused for up to PERSIST_WINDOW frames before
+decaying to zeros.  This avoids zero-vector spikes that would corrupt the
+sliding window buffer and trigger false "no hand" resets.
+
+Usage
+-----
+    python model/ModelTester.py
+"""
+
+import sys
+import os
+
+# Path setup — import normalize_frames from sibling translationService/
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_PROJECT = os.path.dirname(_HERE)
+_TRANSLATION_SERVICE = os.path.join(_PROJECT, "translationService")
+if _TRANSLATION_SERVICE not in sys.path:
+    sys.path.insert(0, _TRANSLATION_SERVICE)
+
+from normalize import normalize_frames
+
 import cv2 as cv
 import numpy as np
 import tensorflow as tf
 import collections
 import time
-import os
-from functions import Gestura
+import mediapipe as mp
 
 # ------------------------------------------------------------------ #
 #  Configuration                                                       #
@@ -16,6 +45,14 @@ CONFIDENCE_THRESH = 0.70
 SEQ_LENGTH        = 35
 FEATURE_DIM       = 258
 SMOOTH_WINDOW     = 5          # majority-vote over last N predictions
+PERSIST_WINDOW    = 5          # bounded persistence grace period (frames)
+
+# Feature sub-dimensions
+_LH_DIM   = 21 * 3      # 63
+_RH_DIM   = 21 * 3      # 63
+_POSE_DIM = 33 * 4      # 132
+
+assert _LH_DIM + _RH_DIM + _POSE_DIM == FEATURE_DIM
 
 # Visual
 FONT         = cv.FONT_HERSHEY_SIMPLEX
@@ -26,22 +63,142 @@ COLOR_WHITE  = (230, 230, 230)
 BAR_COLOR    = (0, 200, 140)
 BAR_BG       = (40, 40, 40)
 
+mp_draw   = mp.solutions.drawing_utils
+mp_holistic = mp.solutions.holistic
+
 
 # ------------------------------------------------------------------ #
-#  Load model and classes                                              #
+#  Nose-normalised keypoint extraction                                 #
 # ------------------------------------------------------------------ #
 
-print("Loading model...")
-model = tf.keras.models.load_model(MODEL_PATH)
+def _extract_258_nose_normalized(results) -> np.ndarray:
+    """Extract a (258,) keypoint vector nose-normalised to pose landmark 0.
 
-# Robust class loading: use npy or fallback to scanning dataset directory
-if os.path.exists(CLASSES_PATH):
-    sign_classes = np.load(CLASSES_PATH, allow_pickle=True)
-else:
-    DATA_DIR = '/home/jiyusss/gestura/model/Keypoint_Data_Augmented'
-    sign_classes = sorted([d for d in os.listdir(DATA_DIR) if os.path.isdir(os.path.join(DATA_DIR, d))])
+    Feature layout: lh(63) + rh(63) + pose(132) = 258.
+    Same format as the production converter and extract_data.py.
+    """
+    # --- Left hand (21 × 3 = 63) ---
+    lh = np.zeros(_LH_DIM, dtype=np.float32)
+    if results.left_hand_landmarks:
+        for i, lm in enumerate(results.left_hand_landmarks.landmark):
+            idx = i * 3
+            lh[idx]     = lm.x
+            lh[idx + 1] = lm.y
+            lh[idx + 2] = lm.z
 
-print(f"Loaded {len(sign_classes)} classes: {list(sign_classes)}")
+    # --- Right hand (21 × 3 = 63) ---
+    rh = np.zeros(_RH_DIM, dtype=np.float32)
+    if results.right_hand_landmarks:
+        for i, lm in enumerate(results.right_hand_landmarks.landmark):
+            idx = i * 3
+            rh[idx]     = lm.x
+            rh[idx + 1] = lm.y
+            rh[idx + 2] = lm.z
+
+    # --- Pose (33 × 4 = 132; includes visibility) ---
+    pose = np.zeros(_POSE_DIM, dtype=np.float32)
+    if results.pose_landmarks:
+        for i, lm in enumerate(results.pose_landmarks.landmark):
+            idx = i * 4
+            pose[idx]     = lm.x
+            pose[idx + 1] = lm.y
+            pose[idx + 2] = lm.z
+            pose[idx + 3] = getattr(lm, "visibility", 0.0)
+
+    # Nose anchor for translation invariance (pose landmark 0)
+    nose_xyz = pose[0:3] if results.pose_landmarks else np.zeros(3, dtype=np.float32)
+
+    # Normalise all components relative to the nose
+    lh = (lh.reshape(-1, 3) - nose_xyz).flatten()
+    rh = (rh.reshape(-1, 3) - nose_xyz).flatten()
+    p = pose.copy().reshape(-1, 4)
+    p[:, :3] -= nose_xyz
+    pose = p.flatten()
+
+    return np.concatenate([lh, rh, pose]).astype(np.float32)
+
+
+# ------------------------------------------------------------------ #
+#  Bounded persistence state                                           #
+# ------------------------------------------------------------------ #
+
+class BoundedPersistence:
+    """Last-known hand positions fill in during brief MediaPipe flicker.
+
+    Each hand has its own lost-frame counter:
+    - Hand detected       → update cache, reset counter to 0.
+    - Hand lost (< limit) → return cached (persisted) position.
+    - Hand lost (≥ limit) → return zeros (genuinely absent).
+
+    Pose is always taken from the current frame, but nose-normalised
+    relative to the current frame's nose.
+    """
+
+    def __init__(self, persist_window: int = PERSIST_WINDOW):
+        self.persist_window = persist_window
+        self.reset()
+
+    def reset(self):
+        self._last_lh = np.zeros(_LH_DIM, dtype=np.float32)
+        self._last_rh = np.zeros(_RH_DIM, dtype=np.float32)
+        self._lh_lost = 0
+        self._rh_lost = 0
+
+    def update(self, raw_kp: np.ndarray) -> np.ndarray:
+        """Apply bounded persistence to a fresh nose-normalised keypoint.
+
+        Parameters
+        ----------
+        raw_kp : np.ndarray, shape (258,)
+            Keypoint from _extract_258_nose_normalized().
+
+        Returns
+        -------
+        Unified keypoint with persisted hands, shape (258,).
+        """
+        # Split the 258-dim vector into components
+        lh = raw_kp[:_LH_DIM].copy()
+        rh = raw_kp[_LH_DIM:_LH_DIM + _RH_DIM].copy()
+        pose = raw_kp[_LH_DIM + _RH_DIM:].copy()
+
+        # Detect whether each hand was present in this frame.
+        # A hand is "present" if any landmark has non-zero coordinates
+        # (after nose-normalisation, the nose itself is at (0,0,0) so
+        # hand landmarks should be distinctly non-zero when detected).
+        lh_present = np.any(np.abs(lh) > 1e-6)
+        rh_present = np.any(np.abs(rh) > 1e-6)
+
+        # Left hand
+        if lh_present:
+            self._last_lh = lh.copy()
+            self._lh_lost = 0
+        else:
+            self._lh_lost += 1
+
+        # Right hand
+        if rh_present:
+            self._last_rh = rh.copy()
+            self._rh_lost = 0
+        else:
+            self._rh_lost += 1
+
+        # Build unified vector with bounded persistence
+        if self._lh_lost < self.persist_window:
+            lh_out = self._last_lh.copy()
+        else:
+            lh_out = np.zeros(_LH_DIM, dtype=np.float32)
+
+        if self._rh_lost < self.persist_window:
+            rh_out = self._last_rh.copy()
+        else:
+            rh_out = np.zeros(_RH_DIM, dtype=np.float32)
+
+        return np.concatenate([lh_out, rh_out, pose]).astype(np.float32)
+
+    @property
+    def any_hand_alive(self) -> bool:
+        """At least one hand is freshly detected or within the persistence window."""
+        return self._lh_lost < self.persist_window or self._rh_lost < self.persist_window
 
 
 # ------------------------------------------------------------------ #
@@ -53,7 +210,6 @@ def draw_progress_bar(img, x, y, w, h, value, bar_color=BAR_COLOR, show_threshol
     fill = int(w * min(max(value, 0.0), 1.0))
     if fill > 0:
         cv.rectangle(img, (x, y), (x + fill, y + h), bar_color, -1)
-    # Draw threshold marker line on the bar
     if show_threshold:
         thresh_x = x + int(w * CONFIDENCE_THRESH)
         cv.line(img, (thresh_x, y - 2), (thresh_x, y + h + 2), (255, 255, 255), 1)
@@ -67,31 +223,27 @@ def put_text(img, text, pos, scale, color, thickness=1):
 
 
 def draw_landmarks(img, results):
+    """Draw MediaPipe landmarks using the old-API result object (raw)."""
     if results.left_hand_landmarks:
-        Gestura.mp_draw.draw_landmarks(
+        mp_draw.draw_landmarks(
             img, results.left_hand_landmarks,
-            Gestura.mp_holistic.HAND_CONNECTIONS,
-            Gestura.mp_draw.DrawingSpec(color=(0, 200, 255), thickness=1, circle_radius=2),
-            Gestura.mp_draw.DrawingSpec(color=(0, 120, 200), thickness=1))
+            mp_holistic.HAND_CONNECTIONS,
+            mp_draw.DrawingSpec(color=(0, 200, 255), thickness=1, circle_radius=2),
+            mp_draw.DrawingSpec(color=(0, 120, 200), thickness=1))
 
     if results.right_hand_landmarks:
-        Gestura.mp_draw.draw_landmarks(
+        mp_draw.draw_landmarks(
             img, results.right_hand_landmarks,
-            Gestura.mp_holistic.HAND_CONNECTIONS,
-            Gestura.mp_draw.DrawingSpec(color=(0, 255, 180), thickness=1, circle_radius=2),
-            Gestura.mp_draw.DrawingSpec(color=(0, 160, 100), thickness=1))
+            mp_holistic.HAND_CONNECTIONS,
+            mp_draw.DrawingSpec(color=(0, 255, 180), thickness=1, circle_radius=2),
+            mp_draw.DrawingSpec(color=(0, 160, 100), thickness=1))
 
     if results.pose_landmarks:
-        Gestura.mp_draw.draw_landmarks(
+        mp_draw.draw_landmarks(
             img, results.pose_landmarks,
-            Gestura.mp_holistic.POSE_CONNECTIONS,
-            Gestura.mp_draw.DrawingSpec(color=(60, 60, 60), thickness=1, circle_radius=1),
-            Gestura.mp_draw.DrawingSpec(color=(40, 40, 40), thickness=1))
-
-
-def hands_present(results) -> bool:
-    return (results.left_hand_landmarks is not None or
-            results.right_hand_landmarks is not None)
+            mp_holistic.POSE_CONNECTIONS,
+            mp_draw.DrawingSpec(color=(60, 60, 60), thickness=1, circle_radius=1),
+            mp_draw.DrawingSpec(color=(40, 40, 40), thickness=1))
 
 
 # ------------------------------------------------------------------ #
@@ -104,29 +256,24 @@ def draw_hud(frame, label, confidence, top_preds, buf_len,
     panel_w = 290
     px      = w - panel_w
 
-    # semi-transparent panel
     overlay = frame.copy()
     cv.rectangle(overlay, (px, 0), (w, h), (10, 10, 10), -1)
     cv.addWeighted(overlay, 0.65, frame, 0.35, 0, frame)
 
-    # title
     put_text(frame, "GESTURA", (px + 12, 34), 0.7, COLOR_GREEN, 2)
     cv.line(frame, (px + 12, 44), (w - 12, 44), COLOR_DIM, 1)
 
-    # buffer bar
     put_text(frame, "BUFFER", (px + 12, 68), 0.4, COLOR_DIM)
     draw_progress_bar(frame, px + 12, 75, panel_w - 24, 7,
                       buf_len / SEQ_LENGTH, bar_color=(80, 160, 255))
     put_text(frame, f"{buf_len}/{SEQ_LENGTH}", (px + 12, 95), 0.38, COLOR_DIM)
 
-    # hand status
     sc = COLOR_GREEN if hand_ok else COLOR_WARN
     put_text(frame, "HAND DETECTED" if hand_ok else "NO HAND",
              (px + 12, 120), 0.42, sc)
 
     cv.line(frame, (px + 12, 132), (w - 12, 132), COLOR_DIM, 1)
 
-    # prediction
     put_text(frame, "PREDICTION", (px + 12, 155), 0.42, COLOR_DIM)
     if confidence >= CONFIDENCE_THRESH:
         put_text(frame, label,                    (px + 12, 190), 0.9,  COLOR_GREEN, 2)
@@ -141,20 +288,14 @@ def draw_hud(frame, label, confidence, top_preds, buf_len,
     else:
         put_text(frame, "---", (px + 12, 190), 0.9, COLOR_DIM, 2)
 
-    # threshold label shown below confidence bar
-    thresh_bar_x = px + 12 + int((panel_w - 24) * CONFIDENCE_THRESH)
-    put_text(frame, f"threshold: {int(CONFIDENCE_THRESH*100)}%",
-             (px + 12, 234), 0.35, COLOR_DIM)
     cv.line(frame, (px + 12, 242), (w - 12, 242), COLOR_DIM, 1)
 
-    # stable label
     put_text(frame, "STABLE", (px + 12, 264), 0.42, COLOR_DIM)
     put_text(frame, smoothed or "---", (px + 12, 294),
              0.75, COLOR_GREEN if smoothed else COLOR_DIM, 2)
 
     cv.line(frame, (px + 12, 308), (w - 12, 308), COLOR_DIM, 1)
 
-    # top-3
     put_text(frame, "TOP 3", (px + 12, 330), 0.42, COLOR_DIM)
     for i, (name, prob) in enumerate(top_preds[:3]):
         y = 352 + i * 46
@@ -165,16 +306,13 @@ def draw_hud(frame, label, confidence, top_preds, buf_len,
                           prob, bar_color=col)
         put_text(frame, f"{int(prob*100)}%", (w - 50, y), 0.4, COLOR_DIM)
 
-    # fps
     put_text(frame, f"FPS {fps:.0f}", (px + 12, h - 14), 0.38, COLOR_DIM)
 
-    # large label overlay on video (bottom-left)
     if confidence >= CONFIDENCE_THRESH:
         bg_w = max(len(label) * 26 + 20, 100)
         cv.rectangle(frame, (10, h - 78), (10 + bg_w, h - 18), (10, 10, 10), -1)
         put_text(frame, label, (20, h - 26), 1.4, COLOR_GREEN, 3)
 
-    # confidence meter bottom-left (always visible)
     meter_y = h - 100
     put_text(frame, f"CONF  {int(confidence*100)}%", (12, meter_y), 0.45, COLOR_WHITE)
     draw_progress_bar(frame, 12, meter_y + 6, 160, 6,
@@ -210,9 +348,12 @@ def run():
     smoothed   = ""
     prev_time  = time.time()
 
+    # Bounded persistence state — survives brief MediaPipe flicker
+    persistence = BoundedPersistence(persist_window=PERSIST_WINDOW)
+
     print("Inference running. Press Q to quit.")
 
-    with Gestura.mp_holistic.Holistic(
+    with mp_holistic.Holistic(
         min_detection_confidence=0.5,
         min_tracking_confidence=0.5
     ) as holistic:
@@ -225,20 +366,27 @@ def run():
 
             frame = cv.flip(frame, 1)
 
-            # detect landmarks
-            _, results = Gestura.point_detection(frame, holistic)
+            # --- Detect landmarks (old stable API) ---
+            image_rgb = cv.cvtColor(frame, cv.COLOR_BGR2RGB)
+            image_rgb.flags.writeable = False
+            results = holistic.process(image_rgb)
+            image_rgb.flags.writeable = True
+
             draw_landmarks(frame, results)
 
-            # extract and buffer
-            kp = Gestura.extract_keypoints(results)
-            frame_buffer.append(kp)
+            # --- Extract nose-normalised keypoints with bounded persistence ---
+            raw_kp = _extract_258_nose_normalized(results)
+            unified_kp = persistence.update(raw_kp)
+            frame_buffer.append(unified_kp)
 
-            hand_ok = hands_present(results)
+            hand_ok = persistence.any_hand_alive
 
             if len(frame_buffer) == SEQ_LENGTH and hand_ok:
-                seq      = np.array(frame_buffer, dtype=np.float32)   # (35, 258)
-                seq      = Gestura.preprocess_landmark_sequence(seq)
-                inp      = seq[np.newaxis]                             # (1, 35, 258)
+                seq = np.array(frame_buffer, dtype=np.float32)          # (35, 258)
+                # Normalise variable-length → fixed-length (35)
+                seq_list = normalize_frames(seq.tolist(), SEQ_LENGTH)
+                seq = np.array(seq_list, dtype=np.float32)
+                inp = seq[np.newaxis]                                    # (1, 35, 258)
 
                 preds     = model.predict(inp, verbose=0)[0]
                 top_idx   = np.argsort(preds)[::-1]
@@ -259,6 +407,7 @@ def run():
             elif not hand_ok:
                 frame_buffer.clear()
                 pred_history.clear()
+                persistence.reset()
                 label      = ""
                 confidence = 0.0
                 top_preds  = []
@@ -280,5 +429,22 @@ def run():
     print("Stopped.")
 
 
+# ------------------------------------------------------------------ #
+#  Load model and classes                                              #
+# ------------------------------------------------------------------ #
+
 if __name__ == "__main__":
+    print("Loading model...")
+    model = tf.keras.models.load_model(MODEL_PATH)
+
+    if os.path.exists(CLASSES_PATH):
+        sign_classes = np.load(CLASSES_PATH, allow_pickle=True)
+    else:
+        DATA_DIR = os.path.join(_HERE, "keypoint_data_augmented")
+        sign_classes = sorted([
+            d for d in os.listdir(DATA_DIR)
+            if os.path.isdir(os.path.join(DATA_DIR, d))
+        ])
+
+    print(f"Loaded {len(sign_classes)} classes: {list(sign_classes)}")
     run()
