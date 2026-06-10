@@ -7,7 +7,7 @@ class Gestura:
     mp_holistic = mp.solutions.holistic
     mp_draw = mp.solutions.drawing_utils
 
-    DATA_PATH = os.path.join("./Keypoint_Data_Selected")
+    DATA_PATH = os.path.join(os.path.dirname(__file__), "keypoint_data_selected")
 
     # FIX: Read sign classes from DATA_PATH (processed keypoints),
     # not from the raw video root. Falls back to empty array if not yet generated.

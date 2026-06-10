@@ -108,8 +108,8 @@ class DataAugmentor:
         return seq
 
 if __name__ == "__main__":
-    INPUT_ROOT       = r"/home/jiyusss/gestura/model/Keypoint_Data_Selected"
-    OUTPUT_ROOT      = r"./Keypoint_Data_Augmented"
+    INPUT_ROOT       = os.path.join(os.path.dirname(__file__), "keypoint_data_selected")
+    OUTPUT_ROOT      = os.path.join(os.path.dirname(__file__), "keypoint_data_augmented")
     NUM_AUG_PER_FILE = 9
     COPY_ORIGINAL    = True
 

@@ -77,7 +77,7 @@ def create_model(num_classes, seq_length=SEQ_LENGTH, feature_dim=FEATURE_DIM,
     return model
 
 if __name__ == "__main__":
-    DATA_ROOT  = '/home/jiyusss/gestura/model/Keypoint_Data_Augmented/'
+    DATA_ROOT  = os.path.join(os.path.dirname(__file__), "keypoint_data_augmented")
     BATCH_SIZE = 32
     EPOCHS     = 150
 

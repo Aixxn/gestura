@@ -1,12 +1,18 @@
 #!/usr/bin/env python3
 """
-Extract keypoints from ASL video files using the new converter pipeline.
+Extract keypoints from ASL video files for model training.
+
+Uses the stable ``mp.solutions.holistic`` API (not the Tasks API) to avoid
+a known GPU/driver crash on Intel Mesa hardware.
 
 Output: directory of .npy files organized by sign class, each with shape
 (35, 258) — ready for model training.
 
 Usage
 -----
+    # Activate translationService venv first:
+    source ../translationService/.venv/bin/activate
+
     # Process all videos in a directory
     python extract_data.py /path/to/videos /path/to/output
 
@@ -44,7 +50,7 @@ import cv2
 import numpy as np
 
 # ---------------------------------------------------------------------------
-# Path setup — import converter from sibling translationService/
+# Path setup — import normalize from sibling translationService/
 # ---------------------------------------------------------------------------
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _PROJECT = os.path.dirname(_HERE)
@@ -52,8 +58,14 @@ _TRANSLATION_SERVICE = os.path.join(_PROJECT, "translationService")
 if _TRANSLATION_SERVICE not in sys.path:
     sys.path.insert(0, _TRANSLATION_SERVICE)
 
-from converter import Converter, FEATURE_DIM, WINDOW_SIZE
 from normalize import normalize_frames
+
+# Feature layout: lh(63) + rh(63) + pose(132) = 258
+WINDOW_SIZE = 35
+FEATURE_DIM = 258
+_LH_DIM = 63
+_RH_DIM = 63
+_POSE_DIM = 132
 
 # ---------------------------------------------------------------------------
 # Supported video extensions
@@ -70,9 +82,74 @@ _TARGET_CLASSES = frozenset({
     "WATER", "WE", "WHAT", "WHERE", "YES", "YOU", "ME",
 })
 
+# ---------------------------------------------------------------------------
+# MediaPipe holistic (old stable API — avoids Tasks API GPU crash)
+# ---------------------------------------------------------------------------
+import mediapipe as mp
 
-def extract_video(video_path: str, converter: Converter) -> np.ndarray | None:
-    """Run MediaPipe on every frame of *video_path*.
+_holistic_model = None
+
+
+def _get_holistic():
+    """Lazy-init the old ``mp.solutions.holistic.Holistic`` pipeline."""
+    global _holistic_model
+    if _holistic_model is None:
+        _holistic_model = mp.solutions.holistic.Holistic(
+            min_detection_confidence=0.6,
+            min_tracking_confidence=0.7,
+        )
+    return _holistic_model
+
+
+def _extract_258(results) -> np.ndarray:
+    """Extract a (258,) keypoint vector from old-API holistic results.
+
+    Feature layout: lh(63) + rh(63) + pose(132) = 258.
+    Nose-normalised (pose landmark 0), same format as the production converter.
+    """
+    # --- Left hand (21 × 3 = 63) ---
+    lh = np.zeros(_LH_DIM, dtype=np.float32)
+    if results.left_hand_landmarks:
+        for i, lm in enumerate(results.left_hand_landmarks.landmark):
+            idx = i * 3
+            lh[idx] = lm.x
+            lh[idx + 1] = lm.y
+            lh[idx + 2] = lm.z
+
+    # --- Right hand (21 × 3 = 63) ---
+    rh = np.zeros(_RH_DIM, dtype=np.float32)
+    if results.right_hand_landmarks:
+        for i, lm in enumerate(results.right_hand_landmarks.landmark):
+            idx = i * 3
+            rh[idx] = lm.x
+            rh[idx + 1] = lm.y
+            rh[idx + 2] = lm.z
+
+    # --- Pose (33 × 4 = 132; includes visibility) ---
+    pose = np.zeros(_POSE_DIM, dtype=np.float32)
+    if results.pose_landmarks:
+        for i, lm in enumerate(results.pose_landmarks.landmark):
+            idx = i * 4
+            pose[idx] = lm.x
+            pose[idx + 1] = lm.y
+            pose[idx + 2] = lm.z
+            pose[idx + 3] = getattr(lm, "visibility", 0.0)
+
+    # Nose anchor for translation invariance (pose landmark 0)
+    nose_xyz = pose[0:3] if results.pose_landmarks else np.zeros(3, dtype=np.float32)
+
+    # Normalise all components relative to the nose
+    lh = (lh.reshape(-1, 3) - nose_xyz).flatten()
+    rh = (rh.reshape(-1, 3) - nose_xyz).flatten()
+    p = pose.copy().reshape(-1, 4)
+    p[:, :3] -= nose_xyz
+    pose = p.flatten()
+
+    return np.concatenate([lh, rh, pose]).astype(np.float32)
+
+
+def extract_video(video_path: str) -> np.ndarray | None:
+    """Run MediaPipe on every frame of *video_path* using the old stable API.
 
     Returns
     -------
@@ -84,20 +161,21 @@ def extract_video(video_path: str, converter: Converter) -> np.ndarray | None:
         print(f"  ⚠️  Could not open: {video_path}")
         return None
 
-    # Reset bounded-persistence state for a fresh video
-    converter.reset_state()
-
+    holistic = _get_holistic()
     frames: list[np.ndarray] = []
+
     while True:
         ret, frame = cap.read()
         if not ret:
             break
         try:
-            # Encode to JPEG and use point_detection (production-proven path)
-            ret, jpeg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
-            if not ret:
-                continue
-            kp = converter.point_detection(jpeg.tobytes())
+            # Old API path: direct numpy array → no JPEG encode, no mp.Image
+            image_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            image_rgb.flags.writeable = False
+            results = holistic.process(image_rgb)
+            image_rgb.flags.writeable = True
+
+            kp = _extract_258(results)
         except Exception as e:
             print(f"  ⚠️  Frame error in {video_path}: {e}")
             continue
@@ -115,7 +193,6 @@ def extract_video(video_path: str, converter: Converter) -> np.ndarray | None:
 def process_videos(
     input_dir: str,
     output_dir: str,
-    converter: Converter,
     *,
     target_class: str | None = None,
     resume: str | None = None,
@@ -129,8 +206,6 @@ def process_videos(
         Root directory containing one subdirectory per sign class.
     output_dir : str
         Where to write the .npy files (mirrors the class layout).
-    converter : Converter
-        Initialised MediaPipe converter instance.
     target_class : str or None
         If set, only process this one class (e.g. ``"AND"``).
     resume : str or None
@@ -183,7 +258,7 @@ def process_videos(
 
         for i, video_name in enumerate(video_files):
             video_path = os.path.join(sign_input, video_name)
-            seq = extract_video(video_path, converter)
+            seq = extract_video(video_path)
 
             if seq is None:
                 skipped += 1
@@ -286,14 +361,13 @@ Examples:
         count_videos(args.input_dir)
         return
 
-    print("Initialising MediaPipe Holistic converter...")
-    converter = Converter()
+    print("Initialising MediaPipe Holistic (old stable API)...")
+    _ = _get_holistic()
     print("Ready.\n")
 
     process_videos(
         args.input_dir,
         args.output_dir,
-        converter,
         target_class=args.target_class,
         resume=args.resume,
         min_frames=args.min_frames,
