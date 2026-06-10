@@ -9,6 +9,7 @@ import os
 # Defaults – can be overridden via env vars
 WINDOW_SIZE = int(os.getenv("WINDOW_SIZE", "35"))
 FEATURE_DIM = int(os.getenv("FEATURE_DIM", "258"))
+PERSIST_WINDOW = int(os.getenv("PERSIST_WINDOW", "5"))
 
 _LH_DIM = 21 * 3      # 63
 _RH_DIM = 21 * 3      # 63
@@ -43,6 +44,11 @@ class Converter:
     Face landmarks are intentionally excluded (the current ML model only
     uses hands + pose).  All coordinates are normalised relative to the
     **pose nose** (landmark 0) for translation invariance.
+
+    Hand keypoints use **bounded persistence**: last-known positions fill in
+    during brief detection flicker (up to *PERSIST_WINDOW* frames), then
+    decay to zeros for genuinely absent hands.  A single unified keypoint
+    vector is returned for both the motion detector and the ML model.
 
     Usage
     -----
@@ -83,12 +89,13 @@ class Converter:
         self._last_rh = np.zeros(_RH_DIM, dtype=np.float32)
         self._last_pose = np.zeros(_POSE_DIM, dtype=np.float32)
 
-        # Persisted keypoint vector (built by point_detection for the
-        # motion detector — uses last-known hand positions to avoid spikes).
-        self._persisted_kp = np.zeros(FEATURE_DIM, dtype=np.float32)
+        # Lost-frame counters for bounded persistence.
+        # Incremented each frame a hand is undetected; reset on detection.
+        self._lh_lost_counter = 0
+        self._rh_lost_counter = 0
 
         # Unnormalised raw components from the most recent frame; used by
-        # _build_persisted_kp() to reconstruct a motion-stable vector.
+        # _build_unified_kp() to reconstruct a bounded-persistence vector.
         self._raw_components: tuple[np.ndarray, ...] | None = None
 
     def __del__(self):
@@ -103,11 +110,11 @@ class Converter:
         """
         Decode raw image bytes and run MediaPipe Holistic.
 
-        Returns **raw** keypoints (zeros for undetected hand groups) — these
-        match the training data distribution of the ML model.
-
-        Use :meth:`get_persisted_keypoints` to obtain a motion-stable version
-        for the motion detector (last-known positions fill in for flicker).
+        Returns a **unified** keypoint vector with bounded persistence:
+        last-known hand positions fill in during brief detection flicker
+        (up to *PERSIST_WINDOW* frames), then decay to zeros for genuinely
+        absent hands.  Suitable for **both** the motion detector and the
+        ML inference pipeline.
         """
         nparr = np.frombuffer(image_bytes, np.uint8)
         cv_image = cv.imdecode(nparr, cv.IMREAD_COLOR)
@@ -119,27 +126,58 @@ class Converter:
 
         detection_result = self.landmarker.detect(mp_image)
         self._last_result = detection_result
-        raw_kp = self._extract_keypoints(detection_result)
+        kp = self._extract_keypoints(detection_result)
 
-        self._persisted_kp = self._build_persisted_kp()
-
-        if raw_kp.shape != (FEATURE_DIM,):
+        if kp.shape != (FEATURE_DIM,):
             raise ValueError(
-                f"MediaPipe returned {raw_kp.shape[0]}-dim keypoints, "
+                f"MediaPipe returned {kp.shape[0]}-dim keypoints, "
                 f"expected {FEATURE_DIM}. Check FEATURE_DIM env var."
             )
 
-        return raw_kp
+        return kp
+
+    def extract_from_frame(self, cv_image: np.ndarray) -> np.ndarray:
+        """Process a cv2 BGR frame directly (skips JPEG encode/decode).
+
+        Same result as :meth:`point_detection` but avoids the encode-decode
+        round trip.  Useful for offline data extraction from video files.
+        """
+        image_rgb = cv.cvtColor(cv_image, cv.COLOR_BGR2RGB)
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=image_rgb)
+
+        detection_result = self.landmarker.detect(mp_image)
+        self._last_result = detection_result
+        kp = self._extract_keypoints(detection_result)
+
+        if kp.shape != (FEATURE_DIM,):
+            raise ValueError(
+                f"MediaPipe returned {kp.shape[0]}-dim keypoints, "
+                f"expected {FEATURE_DIM}. Check FEATURE_DIM env var."
+            )
+        return kp
+
+    def reset_state(self):
+        """Reset per-video state (counters, caches, buffer).
+
+        Call between videos during batch extraction so bounded-persistence
+        counters don't carry over from one video to the next.
+        """
+        self._lh_lost_counter = 0
+        self._rh_lost_counter = 0
+        self._last_lh = np.zeros(_LH_DIM, dtype=np.float32)
+        self._last_rh = np.zeros(_RH_DIM, dtype=np.float32)
+        self._last_pose = np.zeros(_POSE_DIM, dtype=np.float32)
+        self._raw_components = None
+        self.window = np.zeros((WINDOW_SIZE, FEATURE_DIM), dtype=np.float32)
+        self.current_length = 0
 
     def get_persisted_keypoints(self) -> np.ndarray:
-        """Return the motion-stable keypoint vector for the current frame.
+        """Return the current unified keypoint vector (bounded persistence).
 
-        Uses last-known hand positions when MediaPipe briefly loses detection,
-        so the motion detector sees smooth transitions instead of zero-to-real
-        spikes.  **Not** suitable for the ML model — the model was trained on
-        zeros for missing hands.
+        This is now identical to what :meth:`point_detection` returns.
+        Retained for backward compatibility.
         """
-        return self._persisted_kp
+        return self._build_unified_kp()
 
     def process_new_frame(self, frame_vector: np.ndarray) -> np.ndarray:
         """Insert a new frame into the sliding window buffer.
@@ -244,14 +282,15 @@ class Converter:
         return np.concatenate([lh, rh, pose]).astype(np.float32)
 
     def _extract_keypoints(self, result) -> np.ndarray:
-        """Extract **raw** keypoints — zeros for undetected landmark groups.
+        """Extract keypoints with bounded persistence.
 
-        Normalised relative to the pose nose.  The persistence cache is
-        updated here but NOT used in the returned vector.
+        1. Extracts raw landmark data from the MediaPipe result.
+        2. Updates the persistence cache (_last_lh / _last_rh / _last_pose).
+        3. Tracks lost-frame counters for each hand.
+        4. Builds and returns a unified vector with bounded persistence.
         """
         lh_data, rh_data = self._fix_handedness(result)
 
-        # Store corrected references for draw_landmarks
         self._corrected_lh = lh_data
         self._corrected_rh = rh_data
 
@@ -264,6 +303,9 @@ class Converter:
                 lh[idx + 1] = lm.y
                 lh[idx + 2] = lm.z
             self._last_lh = lh.copy()
+            self._lh_lost_counter = 0
+        else:
+            self._lh_lost_counter += 1
 
         # --- Right hand (21 × 3 = 63) ---
         rh = np.zeros(_RH_DIM, dtype=np.float32)
@@ -274,6 +316,9 @@ class Converter:
                 rh[idx + 1] = lm.y
                 rh[idx + 2] = lm.z
             self._last_rh = rh.copy()
+            self._rh_lost_counter = 0
+        else:
+            self._rh_lost_counter += 1
 
         # --- Pose (33 × 4 = 132; includes visibility) ---
         pose = np.zeros(_POSE_DIM, dtype=np.float32)
@@ -286,29 +331,34 @@ class Converter:
                 pose[idx + 3] = lm.visibility if hasattr(lm, 'visibility') else 0.0
             self._last_pose = pose.copy()
 
-        # Store unnormalised copies for _build_persisted_kp
         self._raw_components = (lh.copy(), rh.copy(), pose.copy())
 
-        # Normalise all components relative to the nose
-        nose_xyz = self._nose_anchor(pose)
-        return self._normalize(lh, rh, pose, nose_xyz)
+        return self._build_unified_kp()
 
-    def _build_persisted_kp(self) -> np.ndarray:
-        """Build a motion-stable keypoint vector using last-known hand positions.
+    def _build_unified_kp(self) -> np.ndarray:
+        """Build a unified keypoint vector with bounded persistence.
 
-        Uses the current frame's pose but substitutes **last-known** hand
-        keypoints when MediaPipe briefly loses a hand.  Normalised relative
-        to the nose from the current raw pose.
+        Uses the current frame's raw pose.  For each hand:
+        - **Detected** or lost for < PERSIST_WINDOW frames → last-known position.
+        - Lost for ≥ PERSIST_WINDOW frames → zeros (genuinely absent).
+
+        Normalised relative to the pose nose.
         """
         if self._raw_components is None:
             return np.zeros(FEATURE_DIM, dtype=np.float32)
 
-        _, _, raw_pose = self._raw_components  # discard raw lh/rh
+        _, _, raw_pose = self._raw_components
         nose_xyz = self._nose_anchor(raw_pose)
 
-        # Use cached hand keypoints (last-known positions)
-        lh = self._last_lh.copy()
-        rh = self._last_rh.copy()
-        pose = raw_pose.copy()
+        if self._lh_lost_counter >= PERSIST_WINDOW:
+            lh = np.zeros(_LH_DIM, dtype=np.float32)
+        else:
+            lh = self._last_lh.copy()
 
+        if self._rh_lost_counter >= PERSIST_WINDOW:
+            rh = np.zeros(_RH_DIM, dtype=np.float32)
+        else:
+            rh = self._last_rh.copy()
+
+        pose = raw_pose.copy()
         return self._normalize(lh, rh, pose, nose_xyz)

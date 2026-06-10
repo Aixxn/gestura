@@ -162,7 +162,6 @@ async def process_frame(request: FrameRequest):
     try:
         raw_bytes = base64.b64decode(request.image_bytes)
         keypoints = converter.point_detection(raw_bytes)
-        persisted = converter.get_persisted_keypoints()
         converter.process_new_frame(keypoints)
 
         session = session_states.setdefault(request.uuid, {
@@ -181,7 +180,7 @@ async def process_frame(request: FrameRequest):
         })
 
         md = session["motion_detector"]
-        sign_ended, completed_sign = md.update(persisted, keypoints)
+        sign_ended, completed_sign = md.update(keypoints)
 
         if sign_ended and completed_sign is not None:
             kp_list = [kp.tolist() for kp in completed_sign]

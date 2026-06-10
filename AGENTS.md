@@ -106,7 +106,7 @@ uvicorn main:app --host 0.0.0.0 --port 7860 --reload
 
 **Key Components**:
 - `main.py` → FastAPI server with session management
-- `converter.py` → MediaPipe keypoint extraction, nose-normalization, hand persistence
+- `converter.py` → MediaPipe keypoint extraction, nose-normalization, **bounded persistence** (last-known hand positions fill in up to `PERSIST_WINDOW` frames, then decay to zeros)
 - `motion_detector.py` → Hysteresis-based sign boundary detection
 - `normalize.py` → Variable-length sign normalization to model's window size
 
@@ -121,6 +121,7 @@ uvicorn main:app --host 0.0.0.0 --port 7860 --reload
 - `GROQ_API_KEY` required for LLM integration
 - `FEATURE_DIM=258` (hands + pose, no face)
 - `WINDOW_SIZE=35` (model expects 35-frame input windows)
+- `PERSIST_WINDOW=5` (bounded persistence — frames before undetected hand decays to zeros)
 
 **Port**: 7860 (FastAPI default)
 

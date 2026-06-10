@@ -34,6 +34,8 @@ class _MockConverter:
     def __init__(self):
         self.window = DEFAULT_WINDOW.copy()
         self.current_length = 0
+        self._lh_lost_counter = 0
+        self._rh_lost_counter = 0
 
     def point_detection(self, image_bytes: bytes) -> np.ndarray:
         return np.zeros(258, dtype=np.float32)
@@ -51,6 +53,9 @@ class _MockConverter:
         return self.window
 
     def get_persisted_keypoints(self) -> np.ndarray:
+        return np.zeros(258, dtype=np.float32)
+
+    def _build_unified_kp(self) -> np.ndarray:
         return np.zeros(258, dtype=np.float32)
 
 

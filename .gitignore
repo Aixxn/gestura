@@ -25,3 +25,6 @@
 
 # mediapipe model files (downloaded at runtime)
 **/*.task
+
+# misc documents
+*.docx
