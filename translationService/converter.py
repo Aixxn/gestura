@@ -60,7 +60,7 @@ class Converter:
 
     def __init__(self, use_gpu: bool = False):
         model_path = _ensure_model()
-        delegate = python.BaseOptions.Delegates.GPU if use_gpu else python.BaseOptions.Delegates.CPU
+        delegate = python.BaseOptions.Delegate.GPU if use_gpu else python.BaseOptions.Delegate.CPU
         base_options = python.BaseOptions(
             model_asset_path=model_path,
             delegate=delegate,
