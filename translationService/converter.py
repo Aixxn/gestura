@@ -10,6 +10,11 @@ import os
 WINDOW_SIZE = int(os.getenv("WINDOW_SIZE", "35"))
 FEATURE_DIM = int(os.getenv("FEATURE_DIM", "258"))
 PERSIST_WINDOW = int(os.getenv("PERSIST_WINDOW", "5"))
+# Number of consecutive frames both hands must be absent before we consider
+# the user idle.  Must be **larger** than the motion detector's
+# ``still_frames_required`` (default 8) so a natural sign-ending stillness
+# triggers the boundary *before* the idle gate resets the pipeline.
+IDLE_THRESHOLD = int(os.getenv("IDLE_THRESHOLD", "15"))
 
 _LH_DIM = 21 * 3      # 63
 _RH_DIM = 21 * 3      # 63
@@ -183,15 +188,21 @@ class Converter:
 
     @property
     def is_idle(self) -> bool:
-        """True when **both** hands have been absent for >= PERSIST_WINDOW frames.
+        """True when **both** hands have been absent for >= IDLE_THRESHOLD frames.
 
         During idle the motion detector receives only persisted or zero
         keypoints and would otherwise trigger false sign boundaries.
         One-handed ASL signs are fine — the signing hand keeps its own
         counter reset even when the other hand is not visible.
+
+        Note
+        ----
+        IDLE_THRESHOLD must be **larger** than the motion detector's
+        ``still_frames_required`` (default 8) so that a natural end-of-sign
+        stillness triggers the boundary before the idle gate preempts it.
         """
-        return (self._lh_lost_counter >= PERSIST_WINDOW
-                and self._rh_lost_counter >= PERSIST_WINDOW)
+        return (self._lh_lost_counter >= IDLE_THRESHOLD
+                and self._rh_lost_counter >= IDLE_THRESHOLD)
 
     def get_raw_keypoints(self) -> np.ndarray:
         """Return the raw (non-persisted) keypoint from the current frame.
