@@ -181,6 +181,30 @@ class Converter:
         self.window = np.zeros((WINDOW_SIZE, FEATURE_DIM), dtype=np.float32)
         self.current_length = 0
 
+    @property
+    def hands_absent_count(self) -> int:
+        """Consecutive frames both hands have been undetected (max of both counters).
+
+        Callers should gate pipeline processing when this exceeds
+        PERSIST_WINDOW — the user is idle, and the motion detector would
+        otherwise trigger false boundaries on persisted/zero keypoints.
+        """
+        return max(self._lh_lost_counter, self._rh_lost_counter)
+
+    def get_raw_keypoints(self) -> np.ndarray:
+        """Return the raw (non-persisted) keypoint from the current frame.
+
+        Hands that were not detected in this frame are set to **zeros**,
+        matching the ML model's training distribution.  Use this as the
+        ``store_kp`` argument to :meth:`~motion_detector.MotionDetector.update`
+        so the sign buffer never contains persisted (last-known) positions.
+        """
+        if self._raw_components is None:
+            return np.zeros(FEATURE_DIM, dtype=np.float32)
+        raw_lh, raw_rh, raw_pose = self._raw_components
+        nose_xyz = self._nose_anchor(raw_pose)
+        return self._normalize(raw_lh, raw_rh, raw_pose, nose_xyz)
+
     def get_persisted_keypoints(self) -> np.ndarray:
         """Return the current unified keypoint vector (bounded persistence).
 

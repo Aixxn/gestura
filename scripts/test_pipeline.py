@@ -32,7 +32,7 @@ _TS = os.path.join(_PROJECT, "translationService")
 if _TS not in sys.path:
     sys.path.insert(0, _TS)
 
-from converter import Converter, WINDOW_SIZE, FEATURE_DIM
+from converter import Converter, WINDOW_SIZE, FEATURE_DIM, PERSIST_WINDOW
 from motion_detector import MotionDetector
 from normalize import normalize_frames
 
@@ -194,7 +194,17 @@ def run():
             print(f"  Extraction error: {e}")
             continue
 
-        sign_ended, completed_sign = md.update(kp)
+        # Gate motion detector on hand absence — when both hands have been
+        # undetected for >= PERSIST_WINDOW frames the user is idle, and the
+        # persisted keypoints would otherwise trigger false sign boundaries.
+        if converter.hands_absent_count >= PERSIST_WINDOW:
+            md.reset()
+        else:
+            # Feed *persisted* keypoints to motion (smooth, no flicker spikes)
+            # but store *raw* keypoints (zeros for absent hands) so the ML
+            # model sees input matching its training distribution.
+            raw = converter.get_raw_keypoints()
+            sign_ended, completed_sign = md.update(kp, store_kp=raw)
 
         if sign_ended and completed_sign is not None:
             kp_list = [k.tolist() for k in completed_sign]

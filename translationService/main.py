@@ -196,7 +196,19 @@ async def process_frame(request: FrameRequest):
         })
 
         md = session["motion_detector"]
-        sign_ended, completed_sign = md.update(keypoints)
+
+        # Gate motion detector on hand absence — when both hands have been
+        # undetected for >= PERSIST_WINDOW frames the user is idle, and the
+        # persisted keypoints would otherwise trigger false sign boundaries.
+        if converter.hands_absent_count >= PERSIST_WINDOW:
+            md.reset()
+            return FrameResponse(status="processing")
+
+        # Feed *persisted* keypoints for motion (smooth, no flicker spikes)
+        # but store *raw* keypoints (zeros for absent hands) so the ML
+        # model sees input matching its training distribution.
+        raw_kp = converter.get_raw_keypoints()
+        sign_ended, completed_sign = md.update(keypoints, store_kp=raw_kp)
 
         if sign_ended and completed_sign is not None:
             kp_list = [kp.tolist() for kp in completed_sign]
