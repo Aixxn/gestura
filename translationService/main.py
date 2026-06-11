@@ -225,7 +225,6 @@ async def process_frame(request: FrameRequest):
     try:
         raw_bytes = base64.b64decode(request.image_bytes)
         keypoints = converter.point_detection(raw_bytes)
-        converter.process_new_frame(keypoints)
 
         session = session_states.setdefault(request.uuid, {
             "motion_detector": MotionDetector(
@@ -254,6 +253,10 @@ async def process_frame(request: FrameRequest):
         if sign_ended and completed_sign is not None:
             kp_list = [kp.tolist() for kp in completed_sign]
             word = _predict_word(kp_list)
+            # Skip BACKGROUND predictions — they are not real signs
+            if word == "BACKGROUND":
+                return FrameResponse(status="background")
+
             sign_idx = session["sign_count"]
             session["sign_count"] += 1
             session["predicted_words"].append(word)

@@ -44,7 +44,7 @@ def _ensure_model() -> str:
 
 class Converter:
     """
-    Converts raw image bytes → MediaPipe Holistic keypoints → sliding window.
+    Converts raw image bytes → MediaPipe Holistic keypoints.
 
     Face landmarks are intentionally excluded (the current ML model only
     uses hands + pose).  All coordinates are normalised relative to the
@@ -54,13 +54,6 @@ class Converter:
     during brief detection flicker (up to *PERSIST_WINDOW* frames), then
     decay to zeros for genuinely absent hands.  A single unified keypoint
     vector is returned for both the motion detector and the ML model.
-
-    Usage
-    -----
-        conv = Converter()
-        kp = conv.point_detection(raw_image_bytes)       # 258-dim vector
-        window = conv.process_new_frame(kp)               # (WINDOW_SIZE, FEATURE_DIM)
-        final = conv.stop()                                # current window snapshot
     """
 
     def __init__(self, use_gpu: bool = False):
@@ -76,10 +69,6 @@ class Converter:
             min_hand_landmarks_confidence=0.7,
         )
         self.landmarker = vision.HolisticLandmarker.create_from_options(options)
-
-        # Fixed-size sliding window buffer
-        self.window = np.zeros((WINDOW_SIZE, FEATURE_DIM), dtype=np.float32)
-        self.current_length = 0
 
         self._last_result = None
 
@@ -183,8 +172,6 @@ class Converter:
         self._last_rh = np.zeros(_RH_DIM, dtype=np.float32)
         self._last_pose = np.zeros(_POSE_DIM, dtype=np.float32)
         self._raw_components = None
-        self.window = np.zeros((WINDOW_SIZE, FEATURE_DIM), dtype=np.float32)
-        self.current_length = 0
 
     @property
     def is_idle(self) -> bool:
@@ -225,24 +212,6 @@ class Converter:
         Retained for backward compatibility.
         """
         return self._build_unified_kp()
-
-    def process_new_frame(self, frame_vector: np.ndarray) -> np.ndarray:
-        """Insert a new frame into the sliding window buffer.
-
-        Returns the current window state: (WINDOW_SIZE, FEATURE_DIM).
-        Before the buffer is full, the right side stays zero-padded.
-        """
-        if self.current_length < WINDOW_SIZE:
-            self.window[self.current_length] = frame_vector
-            self.current_length += 1
-        else:
-            self.window[:-1] = self.window[1:]
-            self.window[-1] = frame_vector
-        return self.window
-
-    def stop(self) -> np.ndarray:
-        """Return the current window snapshot (right-padded with zeros)."""
-        return self.window
 
     def draw_landmarks(self, frame: np.ndarray) -> None:
         """Draw hand landmarks onto *frame* in-place.

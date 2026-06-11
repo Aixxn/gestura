@@ -23,8 +23,6 @@ keras.models.load_model = lambda path: None
 # Mock the ``converter`` module BEFORE importing ``main``
 # ---------------------------------------------------------------------------
 
-DEFAULT_WINDOW = np.zeros((35, 258), dtype=np.float32)
-
 _mock_converter_module = types.ModuleType("converter")
 _mock_converter_module.FEATURE_DIM = 258
 _mock_converter_module.WINDOW_SIZE = 35
@@ -32,25 +30,11 @@ _mock_converter_module.WINDOW_SIZE = 35
 
 class _MockConverter:
     def __init__(self):
-        self.window = DEFAULT_WINDOW.copy()
-        self.current_length = 0
         self._lh_lost_counter = 0
         self._rh_lost_counter = 0
 
     def point_detection(self, image_bytes: bytes) -> np.ndarray:
         return np.zeros(258, dtype=np.float32)
-
-    def process_new_frame(self, frame_vector: np.ndarray) -> np.ndarray:
-        if self.current_length < 35:
-            self.window[self.current_length] = frame_vector
-            self.current_length += 1
-        else:
-            self.window[:-1] = self.window[1:]
-            self.window[-1] = frame_vector
-        return self.window
-
-    def stop(self) -> np.ndarray:
-        return self.window
 
     def get_persisted_keypoints(self) -> np.ndarray:
         return np.zeros(258, dtype=np.float32)
@@ -74,8 +58,6 @@ client = TestClient(svc.app)
 def reset_state():
     svc.session_states.clear()
     svc.motion_detector.reset()
-    svc.converter.window = DEFAULT_WINDOW.copy()
-    svc.converter.current_length = 0
     yield
 
 

@@ -66,6 +66,8 @@ FEATURE_DIM = 258
 _LH_DIM = 63
 _RH_DIM = 63
 _POSE_DIM = 132
+PERSIST_WINDOW = 5  # match converter.py bounded persistence duration
+NUM_BACKGROUND_SAMPLES = 250  # total background samples to generate
 
 # ---------------------------------------------------------------------------
 # Supported video extensions
@@ -101,55 +103,93 @@ def _get_holistic():
     return _holistic_model
 
 
-def _extract_258(results) -> np.ndarray:
-    """Extract a (258,) keypoint vector from old-API holistic results.
+class BoundedPersistenceExtractor:
+    """Mirrors production converter.py's bounded persistence logic.
 
-    Feature layout: lh(63) + rh(63) + pose(132) = 258.
-    Nose-normalised (pose landmark 0), same format as the production converter.
+    Maintains per-video state (lost-frame counters, last-known hand
+    positions) so that training data matches inference exactly:
+    - Hand detected → use real position, update cache, reset counter
+    - Hand lost < PERSIST_WINDOW frames → use last-known position
+    - Hand lost >= PERSIST_WINDOW frames → use zeros (genuinely absent)
+    - Pose always from current frame (not persisted)
+    - Nose-normalised after persistence is applied
     """
-    # --- Left hand (21 × 3 = 63) ---
-    lh = np.zeros(_LH_DIM, dtype=np.float32)
-    if results.left_hand_landmarks:
-        for i, lm in enumerate(results.left_hand_landmarks.landmark):
-            idx = i * 3
-            lh[idx] = lm.x
-            lh[idx + 1] = lm.y
-            lh[idx + 2] = lm.z
 
-    # --- Right hand (21 × 3 = 63) ---
-    rh = np.zeros(_RH_DIM, dtype=np.float32)
-    if results.right_hand_landmarks:
-        for i, lm in enumerate(results.right_hand_landmarks.landmark):
-            idx = i * 3
-            rh[idx] = lm.x
-            rh[idx + 1] = lm.y
-            rh[idx + 2] = lm.z
+    def __init__(self):
+        self.holistic = _get_holistic()
+        self.reset()
 
-    # --- Pose (33 × 4 = 132; includes visibility) ---
-    pose = np.zeros(_POSE_DIM, dtype=np.float32)
-    if results.pose_landmarks:
-        for i, lm in enumerate(results.pose_landmarks.landmark):
-            idx = i * 4
-            pose[idx] = lm.x
-            pose[idx + 1] = lm.y
-            pose[idx + 2] = lm.z
-            pose[idx + 3] = getattr(lm, "visibility", 0.0)
+    def reset(self):
+        self._last_lh = np.zeros(_LH_DIM, dtype=np.float32)
+        self._last_rh = np.zeros(_RH_DIM, dtype=np.float32)
+        self._lh_lost = 0
+        self._rh_lost = 0
 
-    # Nose anchor for translation invariance (pose landmark 0)
-    nose_xyz = pose[0:3] if results.pose_landmarks else np.zeros(3, dtype=np.float32)
+    def process_frame(self, frame: np.ndarray) -> np.ndarray:
+        """Run MediaPipe + bounded persistence + nose normalisation.
 
-    # Normalise all components relative to the nose
-    lh = (lh.reshape(-1, 3) - nose_xyz).flatten()
-    rh = (rh.reshape(-1, 3) - nose_xyz).flatten()
-    p = pose.copy().reshape(-1, 4)
-    p[:, :3] -= nose_xyz
-    pose = p.flatten()
+        Returns (258,) keypoint vector identical to converter.py output.
+        """
+        image_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        image_rgb.flags.writeable = False
+        results = self.holistic.process(image_rgb)
+        image_rgb.flags.writeable = True
 
-    return np.concatenate([lh, rh, pose]).astype(np.float32)
+        # ---- Raw extraction (no normalisation yet) ----
+        lh = np.zeros(_LH_DIM, dtype=np.float32)
+        if results.left_hand_landmarks:
+            for i, lm in enumerate(results.left_hand_landmarks.landmark):
+                idx = i * 3
+                lh[idx] = lm.x; lh[idx + 1] = lm.y; lh[idx + 2] = lm.z
+            self._last_lh = lh.copy()
+            self._lh_lost = 0
+        else:
+            self._lh_lost += 1
+
+        rh = np.zeros(_RH_DIM, dtype=np.float32)
+        if results.right_hand_landmarks:
+            for i, lm in enumerate(results.right_hand_landmarks.landmark):
+                idx = i * 3
+                rh[idx] = lm.x; rh[idx + 1] = lm.y; rh[idx + 2] = lm.z
+            self._last_rh = rh.copy()
+            self._rh_lost = 0
+        else:
+            self._rh_lost += 1
+
+        pose = np.zeros(_POSE_DIM, dtype=np.float32)
+        pose_detected = results.pose_landmarks is not None
+        if pose_detected:
+            for i, lm in enumerate(results.pose_landmarks.landmark):
+                idx = i * 4
+                pose[idx] = lm.x
+                pose[idx + 1] = lm.y
+                pose[idx + 2] = lm.z
+                pose[idx + 3] = getattr(lm, "visibility", 0.0)
+
+        # ---- Bounded persistence for hands ----
+        if self._lh_lost >= PERSIST_WINDOW:
+            lh = np.zeros(_LH_DIM, dtype=np.float32)
+        else:
+            lh = self._last_lh.copy()
+
+        if self._rh_lost >= PERSIST_WINDOW:
+            rh = np.zeros(_RH_DIM, dtype=np.float32)
+        else:
+            rh = self._last_rh.copy()
+
+        # ---- Nose normalisation (same as converter.py) ----
+        nose_xyz = pose[0:3] if pose_detected else np.zeros(3, dtype=np.float32)
+        lh = (lh.reshape(-1, 3) - nose_xyz).flatten()
+        rh = (rh.reshape(-1, 3) - nose_xyz).flatten()
+        p = pose.copy().reshape(-1, 4)
+        p[:, :3] -= nose_xyz
+        pose = p.flatten()
+
+        return np.concatenate([lh, rh, pose]).astype(np.float32)
 
 
-def extract_video(video_path: str) -> np.ndarray | None:
-    """Run MediaPipe on every frame of *video_path* using the old stable API.
+def extract_video(video_path: str, extractor: BoundedPersistenceExtractor) -> np.ndarray | None:
+    """Run MediaPipe on every frame of *video_path* with bounded persistence.
 
     Returns
     -------
@@ -161,7 +201,7 @@ def extract_video(video_path: str) -> np.ndarray | None:
         print(f"  ⚠️  Could not open: {video_path}")
         return None
 
-    holistic = _get_holistic()
+    extractor.reset()
     frames: list[np.ndarray] = []
 
     while True:
@@ -169,13 +209,7 @@ def extract_video(video_path: str) -> np.ndarray | None:
         if not ret:
             break
         try:
-            # Old API path: direct numpy array → no JPEG encode, no mp.Image
-            image_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            image_rgb.flags.writeable = False
-            results = holistic.process(image_rgb)
-            image_rgb.flags.writeable = True
-
-            kp = _extract_258(results)
+            kp = extractor.process_frame(frame)
         except Exception as e:
             print(f"  ⚠️  Frame error in {video_path}: {e}")
             continue
@@ -190,6 +224,83 @@ def extract_video(video_path: str) -> np.ndarray | None:
     return np.array(frames, dtype=np.float32)
 
 
+def generate_background(output_dir: str, existing_samples_dir: str | None = None) -> int:
+    """Generate synthetic BACKGROUND class samples.
+
+    Types of samples produced (total = NUM_BACKGROUND_SAMPLES):
+      1. All-zero keypoints — simulates empty frame, no person visible
+      2. All-zero + small Gaussian noise — camera noise simulation
+      3. Pose-only — hand columns zeroed from real sign samples
+      4. Pose-only + small noise — same with added jitter
+
+    Parameters
+    ----------
+    output_dir : str
+        Directory where ``BACKGROUND/`` subdir will be written.
+    existing_samples_dir : str or None
+        If provided, real sign samples from this directory are used
+        to produce pose-only background variants (hand columns zeroed).
+
+    Returns
+    -------
+    int  Number of background samples saved.
+    """
+    bg_dir = os.path.join(output_dir, "BACKGROUND")
+    os.makedirs(bg_dir, exist_ok=True)
+
+    # Scratch space for real-samples used in pose-only generation
+    real_samples: list[np.ndarray] = []
+    if existing_samples_dir and os.path.isdir(existing_samples_dir):
+        for cls_dir in os.listdir(existing_samples_dir):
+            cls_path = os.path.join(existing_samples_dir, cls_dir)
+            if not os.path.isdir(cls_path) or cls_dir == "BACKGROUND":
+                continue
+            for fname in os.listdir(cls_path):
+                if not fname.endswith(".npy"):
+                    continue
+                try:
+                    arr = np.load(os.path.join(cls_path, fname))
+                    if arr.shape == (WINDOW_SIZE, FEATURE_DIM):
+                        real_samples.append(arr)
+                except Exception:
+                    pass
+
+    rng = np.random.default_rng(seed=42)
+    saved = 0
+
+    # 1. All-zero samples
+    zero_base = np.zeros((WINDOW_SIZE, FEATURE_DIM), dtype=np.float32)
+    for i in range(50):
+        np.save(os.path.join(bg_dir, f"zero_{i}.npy"), zero_base)
+        saved += 1
+
+    # 2. All-zero + noise
+    for i in range(50):
+        noise = rng.normal(0, 0.005, (WINDOW_SIZE, FEATURE_DIM)).astype(np.float32)
+        np.save(os.path.join(bg_dir, f"zero_noise_{i}.npy"), zero_base + noise)
+        saved += 1
+
+    # 3. Pose-only (hands zeroed) from real samples
+    n_pose = min(100, max(1, len(real_samples)))
+    chosen = rng.choice(len(real_samples), size=n_pose, replace=False)
+    for i, idx in enumerate(chosen):
+        pose_only = real_samples[idx].copy()
+        pose_only[:, :126] = 0.0  # zero out left + right hand columns
+        np.save(os.path.join(bg_dir, f"pose_{i}.npy"), pose_only)
+        saved += 1
+
+    # 4. Pose-only + noise
+    noise_std = 0.003
+    for i, idx in enumerate(chosen[:50]):
+        pose_only = real_samples[idx].copy()
+        pose_only[:, :126] = rng.normal(0, noise_std, (WINDOW_SIZE, 126)).astype(np.float32)
+        np.save(os.path.join(bg_dir, f"pose_noise_{i}.npy"), pose_only)
+        saved += 1
+
+    print(f"\n  BACKGROUND → {saved} samples saved ({bg_dir})")
+    return saved
+
+
 def process_videos(
     input_dir: str,
     output_dir: str,
@@ -197,6 +308,7 @@ def process_videos(
     target_class: str | None = None,
     resume: str | None = None,
     min_frames: int = 2,
+    generate_bg: bool = False,
 ) -> None:
     """Walk *input_dir*/*class*/*.mp4, extract keypoints, save to *output_dir*.
 
@@ -212,6 +324,8 @@ def process_videos(
         Class name to resume from (skips earlier classes).
     min_frames : int
         Minimum number of successfully extracted frames required.
+    generate_bg : bool
+        If True, generate synthetic BACKGROUND class samples after extraction.
     """
     sign_classes = sorted(
         d for d in os.listdir(input_dir)
@@ -228,6 +342,7 @@ def process_videos(
         except ValueError:
             print(f"  ⚠️  Resume class '{resume}' not found, starting from beginning.")
 
+    extractor = BoundedPersistenceExtractor()
     total_saved = 0
     total_skipped = 0
 
@@ -258,7 +373,7 @@ def process_videos(
 
         for i, video_name in enumerate(video_files):
             video_path = os.path.join(sign_input, video_name)
-            seq = extract_video(video_path)
+            seq = extract_video(video_path, extractor)
 
             if seq is None:
                 skipped += 1
@@ -291,9 +406,17 @@ def process_videos(
         print(f"  ──> {saved} saved, {skipped} skipped")
 
     print(f"\n{'='*60}")
-    print(f"  Done: {total_saved} files saved, {total_skipped} skipped")
-    print(f"  Output: {output_dir}")
+    print(f"  Extraction done: {total_saved} files saved, {total_skipped} skipped")
     print(f"{'='*60}")
+
+    # Background generation (runs after all sign extraction)
+    if generate_bg:
+        print("\nGenerating BACKGROUND class samples...")
+        bg_saved = generate_background(output_dir, output_dir)
+        total_saved += bg_saved
+        print(f"\n{'='*60}")
+        print(f"  Total: {total_saved} files (including {bg_saved} background)")
+        print(f"{'='*60}")
 
 
 def count_videos(input_dir: str) -> None:
@@ -348,6 +471,10 @@ Examples:
         "--min-frames", type=int, default=2,
         help="Minimum extracted frames to keep a sample (default: 2)",
     )
+    parser.add_argument(
+        "--generate-background", action="store_true",
+        help="Generate synthetic BACKGROUND class samples after extraction",
+    )
     args = parser.parse_args()
 
     if not os.path.isdir(args.input_dir):
@@ -371,6 +498,7 @@ Examples:
         target_class=args.target_class,
         resume=args.resume,
         min_frames=args.min_frames,
+        generate_bg=args.generate_background,
     )
 
 

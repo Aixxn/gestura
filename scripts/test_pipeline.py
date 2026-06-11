@@ -295,6 +295,11 @@ def run():
         if sign_ended and completed_sign is not None:
             kp_list = [k.tolist() for k in completed_sign]
             word, conf = predict_word(kp_list)
+
+            # Skip BACKGROUND predictions — they are not real signs
+            if word == "BACKGROUND":
+                continue
+
             words.append(word)
             last_word = word
             last_conf = conf
