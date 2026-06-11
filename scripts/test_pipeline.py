@@ -26,6 +26,10 @@ Output
 import sys
 import os
 
+# Force CPU-only BEFORE any TensorFlow/Keras import — avoids XLA libdevice
+# error on machines without NVIDIA CUDA toolkit installed.
+os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+
 # Quick check: is the translationService venv activated?
 try:
     import keras

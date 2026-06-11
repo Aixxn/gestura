@@ -1,4 +1,9 @@
 import os
+
+# Force CPU-only BEFORE any TensorFlow/Keras import — avoids XLA libdevice
+# error on machines without NVIDIA CUDA toolkit installed.
+os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+
 import base64
 import numpy as np
 import keras
