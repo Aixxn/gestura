@@ -198,17 +198,13 @@ async def process_frame(request: FrameRequest):
         md = session["motion_detector"]
 
         # Gate motion detector on hand absence — only reset when **both**
-        # hands have been undetected for >= PERSIST_WINDOW frames (the user
-        # is idle).  One-handed ASL signs must not trigger a reset.
+        # hands have been undetected for >= IDLE_THRESHOLD frames (the user
+        # is genuinely idle).  One-handed ASL signs must not trigger a reset.
         if converter.is_idle:
             md.reset()
             return FrameResponse(status="processing")
 
-        # Feed *persisted* keypoints for motion (smooth, no flicker spikes)
-        # but store *raw* keypoints (zeros for absent hands) so the ML
-        # model sees input matching its training distribution.
-        raw_kp = converter.get_raw_keypoints()
-        sign_ended, completed_sign = md.update(keypoints, store_kp=raw_kp)
+        sign_ended, completed_sign = md.update(keypoints)
 
         if sign_ended and completed_sign is not None:
             kp_list = [kp.tolist() for kp in completed_sign]
