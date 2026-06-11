@@ -26,6 +26,15 @@ Output
 import sys
 import os
 
+# Quick check: is the translationService venv activated?
+try:
+    import keras
+except ImportError:
+    print("\n  ❌ ERROR: 'keras' not found. You need to activate the translationService venv:")
+    print("     source translationService/.venv/bin/activate")
+    print("     python scripts/test_pipeline.py\n")
+    sys.exit(1)
+
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _PROJECT = os.path.dirname(_HERE)
 _TS = os.path.join(_PROJECT, "translationService")
@@ -53,26 +62,33 @@ CONFIDENCE_THRESH = 0.5
 
 model = None
 word_mapping: list[str] = []
+_loud = "  !!! "
+
+print(f"\n{'='*60}")
+print(f"  Looking for model at: {_MODEL_PATH}")
+print(f"  File exists:          {os.path.isfile(_MODEL_PATH)}")
+print(f"{'='*60}\n")
 
 print("Loading model...")
 try:
     model = keras.models.load_model(_MODEL_PATH)
-    print(f"  Model: {model.input_shape} -> {model.output_shape}")
+    num_classes = model.output_shape[-1]
+    print(f"  ✅ Model loaded: {model.input_shape} -> {model.output_shape}")
 except Exception as e:
-    print(f"  No model loaded ({e}) — showing 'sign_detected'")
+    print(f"  ❌ FAILED to load model: {e}")
+    print(f"  {_loud}FALLBACK: will print 'sign_detected' for all boundaries")
 
 if model is not None:
-    num_classes = model.output_shape[-1]
     try:
         word_mapping = list(np.load(_CLASSES_PATH, allow_pickle=True))
         if len(word_mapping) != num_classes:
-            print(f"  Warning: sign_classes ({len(word_mapping)}) "
+            print(f"  ⚠️  sign_classes ({len(word_mapping)}) "
                   f"!= model ({num_classes}), using fallback labels")
             word_mapping = [f"word_{i}" for i in range(num_classes)]
         else:
-            print(f"  {len(word_mapping)} classes loaded from sign_classes.npy")
+            print(f"  ✅ {len(word_mapping)} classes loaded: {word_mapping[:5]}...")
     except Exception as e:
-        print(f"  Could not load sign_classes.npy ({e}), using fallback labels")
+        print(f"  ❌ Could not load sign_classes.npy ({e}), using fallback labels")
         word_mapping = [f"word_{i}" for i in range(num_classes)]
 
 # ------------------------------------------------------------------ #
