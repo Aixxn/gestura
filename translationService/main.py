@@ -197,10 +197,10 @@ async def process_frame(request: FrameRequest):
 
         md = session["motion_detector"]
 
-        # Gate motion detector on hand absence — when both hands have been
-        # undetected for >= PERSIST_WINDOW frames the user is idle, and the
-        # persisted keypoints would otherwise trigger false sign boundaries.
-        if converter.hands_absent_count >= PERSIST_WINDOW:
+        # Gate motion detector on hand absence — only reset when **both**
+        # hands have been undetected for >= PERSIST_WINDOW frames (the user
+        # is idle).  One-handed ASL signs must not trigger a reset.
+        if converter.is_idle:
             md.reset()
             return FrameResponse(status="processing")
 

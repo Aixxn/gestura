@@ -182,14 +182,16 @@ class Converter:
         self.current_length = 0
 
     @property
-    def hands_absent_count(self) -> int:
-        """Consecutive frames both hands have been undetected (max of both counters).
+    def is_idle(self) -> bool:
+        """True when **both** hands have been absent for >= PERSIST_WINDOW frames.
 
-        Callers should gate pipeline processing when this exceeds
-        PERSIST_WINDOW — the user is idle, and the motion detector would
-        otherwise trigger false boundaries on persisted/zero keypoints.
+        During idle the motion detector receives only persisted or zero
+        keypoints and would otherwise trigger false sign boundaries.
+        One-handed ASL signs are fine — the signing hand keeps its own
+        counter reset even when the other hand is not visible.
         """
-        return max(self._lh_lost_counter, self._rh_lost_counter)
+        return (self._lh_lost_counter >= PERSIST_WINDOW
+                and self._rh_lost_counter >= PERSIST_WINDOW)
 
     def get_raw_keypoints(self) -> np.ndarray:
         """Return the raw (non-persisted) keypoint from the current frame.

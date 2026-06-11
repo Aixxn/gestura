@@ -32,7 +32,7 @@ _TS = os.path.join(_PROJECT, "translationService")
 if _TS not in sys.path:
     sys.path.insert(0, _TS)
 
-from converter import Converter, WINDOW_SIZE, FEATURE_DIM, PERSIST_WINDOW
+from converter import Converter, WINDOW_SIZE, FEATURE_DIM
 from motion_detector import MotionDetector
 from normalize import normalize_frames
 
@@ -194,10 +194,10 @@ def run():
             print(f"  Extraction error: {e}")
             continue
 
-        # Gate motion detector on hand absence — when both hands have been
-        # undetected for >= PERSIST_WINDOW frames the user is idle, and the
-        # persisted keypoints would otherwise trigger false sign boundaries.
-        if converter.hands_absent_count >= PERSIST_WINDOW:
+        # Gate motion detector on hand absence — only reset when **both**
+        # hands have been undetected for >= PERSIST_WINDOW frames (the user
+        # is idle).  One-handed ASL signs must not trigger a reset.
+        if converter.is_idle:
             md.reset()
         else:
             # Feed *persisted* keypoints to motion (smooth, no flicker spikes)
