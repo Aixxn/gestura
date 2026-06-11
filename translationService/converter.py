@@ -236,8 +236,9 @@ class Converter:
     def draw_landmarks(self, frame: np.ndarray) -> None:
         """Draw hand landmarks onto *frame* in-place.
 
-        Uses cached coordinates when MediaPipe briefly loses a hand,
-        so the overlay stays stable instead of flickering.
+        Uses cached coordinates when MediaPipe briefly loses a hand
+        (up to PERSIST_WINDOW frames), then clears the cache so the
+        overlay disappears when both hands are genuinely absent.
         """
         if not hasattr(self, '_corrected_lh'):
             return
@@ -248,9 +249,11 @@ class Converter:
 
         hand_conn = [(i, i + 1) for i in range(20)]
 
-        # Left hand
+        # Left hand — update cache when detected; draw only if still alive
         if self._corrected_lh:
             self._draw_lh = [(lm.x, lm.y) for lm in self._corrected_lh]
+        elif self._lh_lost_counter >= PERSIST_WINDOW:
+            self._draw_lh.clear()
         if self._draw_lh:
             pts = [_to_px(nx, ny) for nx, ny in self._draw_lh]
             for a, b in hand_conn:
@@ -261,6 +264,8 @@ class Converter:
         # Right hand
         if self._corrected_rh:
             self._draw_rh = [(lm.x, lm.y) for lm in self._corrected_rh]
+        elif self._rh_lost_counter >= PERSIST_WINDOW:
+            self._draw_rh.clear()
         if self._draw_rh:
             pts = [_to_px(nx, ny) for nx, ny in self._draw_rh]
             for a, b in hand_conn:
