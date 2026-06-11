@@ -79,7 +79,9 @@ try:
     num_classes = model.output_shape[-1]
     print(f"  ✅ Model loaded: {model.input_shape} -> {model.output_shape}")
 except Exception as e:
+    import traceback
     print(f"  ❌ FAILED to load model: {e}")
+    traceback.print_exc()
     print(f"  {_loud}FALLBACK: will print 'sign_detected' for all boundaries")
 
 if model is not None:
@@ -197,6 +199,13 @@ def run():
     word_ttl = 0
     prev_time = time.time()
 
+    # Final model status check
+    if model is None:
+        print(f"  {_loud}WARNING: model is None — all predictions will be 'sign_detected'!")
+        print(f"  {_loud}Check the error above for why model loading failed.")
+    else:
+        print(f"  ✅ model is loaded and ready ({model.input_shape} -> {model.output_shape})")
+
     print("\n" + "=" * 60)
     print("  Gestura Pipeline Tester  [DIAGNOSTIC MODE]")
     print("  Sign in front of the webcam.")
@@ -237,7 +246,8 @@ def run():
             last_conf = conf
             word_ttl = 60
 
-            print(f"  -> Sign #{len(words)-1}: {word}  ({conf:.0%})")
+            model_status = "MODEL_LOADED" if model is not None else "MODEL_NONE"
+            print(f"  -> Sign #{len(words)-1}: {word}  ({conf:.0%})  [{model_status}]")
             print(f"     Gloss so far: {' '.join(words)}")
 
         # ---- Draw landmarks ----
