@@ -1,4 +1,50 @@
 import os
+import sys
+
+# ---- CUDA / XLA setup: find libdevice.10.bc so XLA can compile GPU kernels ----
+# This must happen before any keras/tensorflow import.
+_CUDA_CANDIDATES = [
+    os.environ.get("CUDA_HOME"),
+    os.environ.get("CUDA_ROOT"),
+    os.environ.get("CUDA_TOOLKIT_ROOT_DIR"),
+    "/usr/local/cuda",
+    "/opt/cuda",
+    "/usr/lib/cuda",
+    "/usr/local/cuda-12",
+    "/usr/local/cuda-11",
+]
+_found_cuda = None
+for cand in _CUDA_CANDIDATES:
+    if cand and os.path.isfile(os.path.join(cand, "nvvm", "libdevice", "libdevice.10.bc")):
+        _found_cuda = cand
+        break
+if not _found_cuda:
+    import subprocess
+    try:
+        _nsmi = subprocess.run(["nvidia-smi"], capture_output=True, text=True, timeout=5)
+        if _nsmi.returncode == 0:
+            for _root in ["/usr/lib/cuda", "/usr/local/cuda"]:
+                if os.path.isfile(os.path.join(_root, "nvvm", "libdevice", "libdevice.10.bc")):
+                    _found_cuda = _root
+                    break
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+    if not _found_cuda:
+        try:
+            _nvvm = __import__("nvidia.cuda_nvvm", fromlist=[""])
+            _pkg_path = os.path.dirname(_nvvm.__file__)
+            _candidate = os.path.join(_pkg_path, "nvvm", "libdevice")
+            if os.path.isfile(os.path.join(_candidate, "libdevice.10.bc")):
+                _found_cuda = os.path.dirname(_candidate)
+        except ImportError:
+            pass
+
+if _found_cuda:
+    os.environ.setdefault("XLA_FLAGS", f"--xla_gpu_cuda_data_dir={_found_cuda}")
+    print(f"[CUDA] Found at {_found_cuda}, set XLA_FLAGS")
+else:
+    print("[CUDA] libdevice.10.bc not found in common locations.")
+
 import base64
 import numpy as np
 import keras
