@@ -194,13 +194,11 @@ def run():
             print(f"  Extraction error: {e}")
             continue
 
-        # Gate motion detector on hand absence — only reset when **both**
-        # hands have been undetected for >= IDLE_THRESHOLD frames (the user
-        # is genuinely idle).  One-handed ASL signs must not trigger a reset.
-        if converter.is_idle:
-            md.reset()
-        else:
-            sign_ended, completed_sign = md.update(kp)
+        # TODO: Re-add idle gate once tuned (see converter.is_idle / IDLE_THRESHOLD)
+        # if converter.is_idle:
+        #     md.reset()
+        # else:
+        sign_ended, completed_sign = md.update(kp)
 
         if sign_ended and completed_sign is not None:
             kp_list = [k.tolist() for k in completed_sign]
