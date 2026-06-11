@@ -98,6 +98,7 @@ if not WORD_MAPPING:
 # ---------------------------------------------------------------------------
 
 converter = Converter()
+_MD_STILLNESS_FLOOR = float(os.getenv("MD_STILLNESS_FLOOR", "0.5"))
 motion_detector = MotionDetector(
     low_factor=0.5,
     high_factor=4.0,
@@ -106,7 +107,7 @@ motion_detector = MotionDetector(
     history_size=30,
     feature_dim=FEATURE_DIM,
     motion_smoothing=0.6,
-    stillness_floor=0.3,
+    stillness_floor=_MD_STILLNESS_FLOOR,
 )
 
 # ---------------------------------------------------------------------------
@@ -189,7 +190,7 @@ async def process_frame(request: FrameRequest):
                 history_size=30,
                 feature_dim=FEATURE_DIM,
                 motion_smoothing=0.6,
-                stillness_floor=0.3,
+                stillness_floor=_MD_STILLNESS_FLOOR,
             ),
             "predicted_words": [],
             "sign_count": 0,

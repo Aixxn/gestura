@@ -52,6 +52,10 @@ import time
 from groq import Groq
 from dotenv import load_dotenv
 
+# Tunable via env var (overrides motion_detector default of 0.5)
+_MD_STILLNESS_FLOOR = float(os.getenv("MD_STILLNESS_FLOOR", "0.5"))
+_MD_STILL_FRAMES = int(os.getenv("MD_STILL_FRAMES", "8"))
+
 # ------------------------------------------------------------------ #
 #  Model + class map                                                  #
 # ------------------------------------------------------------------ #
@@ -165,15 +169,18 @@ def _open_webcam() -> cv.VideoCapture | None:
 def run():
     print("\nInitialising MediaPipe Holistic...")
     converter = Converter()
+    print(f"  MotionDetector: stillness_floor={_MD_STILLNESS_FLOOR}, still_frames={_MD_STILL_FRAMES}")
+    print(f"  Set MD_STILLNESS_FLOOR env var to tune (default 0.5).")
+    print(f"  Tip: try MD_STILLNESS_FLOOR=0.3 (old default) or 0.8 if too many/too few detections.")
     md = MotionDetector(
         low_factor=0.5,
         high_factor=4.0,
-        still_frames_required=8,
+        still_frames_required=_MD_STILL_FRAMES,
         min_sign_duration=5,
         history_size=30,
         feature_dim=FEATURE_DIM,
         motion_smoothing=0.6,
-        stillness_floor=0.3,
+        stillness_floor=_MD_STILLNESS_FLOOR,
     )
 
     cap = _open_webcam()
@@ -191,10 +198,15 @@ def run():
     prev_time = time.time()
 
     print("\n" + "=" * 60)
-    print("  Gestura Pipeline Tester")
+    print("  Gestura Pipeline Tester  [DIAGNOSTIC MODE]")
     print("  Sign in front of the webcam.")
     print("  Controls:  Q = stop & translate     C = clear")
+    print("  D = toggle debug overlay (default ON)")
     print("=" * 60 + "\n")
+
+    show_debug = True
+    frame_count = 0
+    debug_terminal_interval = 30  # print debug to terminal every N frames
 
     while True:
         ret, frame = cap.read()
@@ -202,6 +214,7 @@ def run():
             continue
 
         frame = cv.flip(frame, 1)
+        frame_count += 1
 
         # ---- Pipeline: extraction + segmentation ----
         try:
@@ -258,12 +271,66 @@ def run():
             cv.putText(frame, gloss, (10, h - 15),
                        cv.FONT_HERSHEY_SIMPLEX, 0.65, (0, 255, 180), 2)
 
+        # Hand detection status (bottom-left)
+        lh_detected = converter._corrected_lh is not None
+        rh_detected = converter._corrected_rh is not None
+        pose_detected = converter._last_result is not None and converter._last_result.pose_landmarks is not None
+        hand_status = f"LH={'Y' if lh_detected else 'N'}  RH={'Y' if rh_detected else 'N'}  Pose={'Y' if pose_detected else 'N'}"
+        cv.putText(frame, hand_status, (10, h - 55),
+                   cv.FONT_HERSHEY_SIMPLEX, 0.4,
+                   (0, 255, 0) if (lh_detected or rh_detected) else (100, 100, 100), 1)
+
         # FPS
         now = time.time()
         fps = 1.0 / max(now - prev_time, 1e-6)
         prev_time = now
         cv.putText(frame, f"FPS: {fps:.0f}", (w - 100, 25),
                    cv.FONT_HERSHEY_SIMPLEX, 0.45, (100, 100, 100), 1)
+
+        # ---- Debug overlay (motion detector internals) ----
+        if show_debug:
+            # Compute adaptive thresholds for display
+            if len(md.raw_motion_history) >= 10:
+                adaptive_base = float(np.median(list(md.raw_motion_history)))
+                low_th = adaptive_base * md.low_factor
+                high_th = adaptive_base * md.high_factor
+            else:
+                adaptive_base = 0.0
+                low_th = 0.1
+                high_th = 0.4
+
+            lines = [
+                f"still_ct:  {md.still_counter}/{md.still_frames_required}",
+                f"sign_fr:   {md.sign_frames}",
+                f"smoothed:  {md.smoothed_motion:.4f}",
+                f"stillness: {md.stillness_floor:.2f}  <-- floor",
+                f"low_th:    {low_th:.4f}",
+                f"high_th:   {high_th:.4f}",
+                f"base_med:  {adaptive_base:.4f}",
+                f"lh_lost:   {converter._lh_lost_counter:2d}  rh_lost: {converter._rh_lost_counter:2d}",
+                f"idle:      {converter.is_idle}",
+            ]
+            # Draw semi-transparent debug panel (top-right)
+            panel_x = w - 260
+            panel_w = 250
+            panel_h = len(lines) * 22 + 20
+            overlay = frame.copy()
+            cv.rectangle(overlay, (panel_x, 10), (panel_x + panel_w, 10 + panel_h),
+                         (20, 20, 20), -1)
+            cv.addWeighted(overlay, 0.7, frame, 0.3, 0, frame)
+            for i, line in enumerate(lines):
+                color = (0, 255, 100) if i == 0 and md.still_counter >= md.still_frames_required else \
+                        (255, 200, 0) if i == 0 else (200, 200, 200)
+                cv.putText(frame, line, (panel_x + 10, 30 + i * 22),
+                           cv.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
+
+            # Terminal debug (periodic)
+            if frame_count % debug_terminal_interval == 0:
+                print(f"  [dbg fr={frame_count:4d}] still_ct={md.still_counter:2d}  "
+                      f"smoothed={md.smoothed_motion:.4f}  floor={md.stillness_floor:.2f}  "
+                      f"low={low_th:.4f}  high={high_th:.4f}  "
+                      f"lh_lost={converter._lh_lost_counter:2d}  rh_lost={converter._rh_lost_counter:2d}  "
+                      f"is_idle={converter.is_idle}  signs={len(words)}")
 
         cv.imshow("Gestura — Pipeline Test", frame)
         key = cv.waitKey(1) & 0xFF
@@ -278,6 +345,9 @@ def run():
             md.reset()
             converter.reset_state()
             print("\n  [C] Session cleared. Starting fresh.\n")
+        elif key == ord("d"):
+            show_debug = not show_debug
+            print(f"\n  [D] Debug overlay {'ON' if show_debug else 'OFF'}\n")
 
     # ---- Cleanup ----
     cap.release()

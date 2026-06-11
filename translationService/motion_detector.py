@@ -36,7 +36,7 @@ class MotionDetector:
                  history_size: int = 30,
                  feature_dim: int = 258,
                  motion_smoothing: float = 0.6,
-                 stillness_floor: float = 0.3):
+                 stillness_floor: float = 0.5):  # bumped from 0.3 — nose-anchored 258-d noise averages ~0.33-0.35
         """
         Parameters
         ----------
