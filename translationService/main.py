@@ -67,15 +67,31 @@ grammar_fixer = ASLGrammarFixer()
 
 MODEL_WINDOW_SIZE = WINDOW_SIZE  # 35 — same as segmentation's sliding window
 
+_MODEL_PATH = "best_model.keras"
+_CLASSES_PATH = "sign_classes.npy"
+
 try:
-    model = keras.models.load_model('model.keras')
-    print(f"[TranslationService] Model loaded (output classes: {model.output_shape[-1]})")
+    model = keras.models.load_model(_MODEL_PATH)
+    print(f"[TranslationService] Model loaded from '{_MODEL_PATH}' "
+          f"(output classes: {model.output_shape[-1]})")
 except Exception as e:
     print(f"[TranslationService] No model loaded ({e}) — using fallback predictions")
     model = None
 
 NUM_CLASSES = model.output_shape[-1] if model else 30
-WORD_MAPPING = [f"word_{i}" for i in range(NUM_CLASSES)]
+
+WORD_MAPPING = []
+try:
+    WORD_MAPPING = list(np.load(_CLASSES_PATH, allow_pickle=True))
+    if len(WORD_MAPPING) != NUM_CLASSES:
+        print(f"[TranslationService] Warning: sign_classes.npy ({len(WORD_MAPPING)} classes)"
+              f" doesn't match model ({NUM_CLASSES}) — using fallback labels")
+        WORD_MAPPING = []
+except Exception as e:
+    print(f"[TranslationService] Could not load sign_classes.npy ({e}) — using fallback labels")
+
+if not WORD_MAPPING:
+    WORD_MAPPING = [f"word_{i}" for i in range(NUM_CLASSES)]
 
 # ---------------------------------------------------------------------------
 # Segmentation pipeline (singletons)
