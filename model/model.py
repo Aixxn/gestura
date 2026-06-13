@@ -161,7 +161,7 @@ if __name__ == "__main__":
 
     model.compile(
         optimizer=keras.optimizers.Adam(learning_rate=1e-4),
-        loss=keras.losses.SparseCategoricalCrossentropy(label_smoothing=0.1),
+        loss='sparse_categorical_crossentropy',
         metrics=['accuracy']
     )
 
