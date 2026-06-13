@@ -71,31 +71,34 @@ mp_holistic = mp.solutions.holistic
 #  Nose-normalised keypoint extraction                                 #
 # ------------------------------------------------------------------ #
 
-def _extract_258_nose_normalized(results) -> np.ndarray:
-    """Extract a (258,) keypoint vector nose-normalised to pose landmark 0.
+def _extract_258_raw(results) -> tuple[np.ndarray, np.ndarray, np.ndarray, bool, bool]:
+    """Extract raw (un-normalised) keypoint components from MediaPipe result.
 
-    Feature layout: lh(63) + rh(63) + pose(132) = 258.
-    Same format as the production converter and extract_data.py.
+    Returns
+    -------
+    lh, rh, pose : np.ndarray  Raw coordinate arrays (not nose-normalised).
+    lh_detected, rh_detected : bool  Whether each hand was found by MediaPipe.
     """
-    # --- Left hand (21 × 3 = 63) ---
     lh = np.zeros(_LH_DIM, dtype=np.float32)
+    lh_detected = False
     if results.left_hand_landmarks:
+        lh_detected = True
         for i, lm in enumerate(results.left_hand_landmarks.landmark):
             idx = i * 3
             lh[idx]     = lm.x
             lh[idx + 1] = lm.y
             lh[idx + 2] = lm.z
 
-    # --- Right hand (21 × 3 = 63) ---
     rh = np.zeros(_RH_DIM, dtype=np.float32)
+    rh_detected = False
     if results.right_hand_landmarks:
+        rh_detected = True
         for i, lm in enumerate(results.right_hand_landmarks.landmark):
             idx = i * 3
             rh[idx]     = lm.x
             rh[idx + 1] = lm.y
             rh[idx + 2] = lm.z
 
-    # --- Pose (33 × 4 = 132; includes visibility) ---
     pose = np.zeros(_POSE_DIM, dtype=np.float32)
     if results.pose_landmarks:
         for i, lm in enumerate(results.pose_landmarks.landmark):
@@ -105,16 +108,21 @@ def _extract_258_nose_normalized(results) -> np.ndarray:
             pose[idx + 2] = lm.z
             pose[idx + 3] = getattr(lm, "visibility", 0.0)
 
-    # Nose anchor for translation invariance (pose landmark 0)
-    nose_xyz = pose[0:3] if results.pose_landmarks else np.zeros(3, dtype=np.float32)
+    return lh, rh, pose, lh_detected, rh_detected
 
+
+def _normalize(lh: np.ndarray, rh: np.ndarray, pose: np.ndarray) -> np.ndarray:
+    """Apply nose-normalisation to raw component arrays.
+
+    Returns a unified (258,) keypoint vector matching the training format.
+    """
+    nose_xyz = pose[0:3] if np.any(pose != 0) else np.zeros(3, dtype=np.float32)
     # Normalise all components relative to the nose
     lh = (lh.reshape(-1, 3) - nose_xyz).flatten()
     rh = (rh.reshape(-1, 3) - nose_xyz).flatten()
     p = pose.copy().reshape(-1, 4)
     p[:, :3] -= nose_xyz
     pose = p.flatten()
-
     return np.concatenate([lh, rh, pose]).astype(np.float32)
 
 
@@ -125,13 +133,18 @@ def _extract_258_nose_normalized(results) -> np.ndarray:
 class BoundedPersistence:
     """Last-known hand positions fill in during brief MediaPipe flicker.
 
+    Operates on RAW (un-normalised) coordinates.  Nose-normalisation is
+    applied AFTER persistence, matching the production converter pipeline.
+
     Each hand has its own lost-frame counter:
     - Hand detected       → update cache, reset counter to 0.
     - Hand lost (< limit) → return cached (persisted) position.
     - Hand lost (≥ limit) → return zeros (genuinely absent).
 
-    Pose is always taken from the current frame, but nose-normalised
-    relative to the current frame's nose.
+    The ``lh_detected`` / ``rh_detected`` flags come directly from
+    MediaPipe's detection result, NOT from a threshold on the normalised
+    values (which can falsely indicate a hand is present when a person
+    is visible but not signing — see nose-normalisation of zero hands).
     """
 
     def __init__(self, persist_window: int = PERSIST_WINDOW):
@@ -144,39 +157,31 @@ class BoundedPersistence:
         self._lh_lost = 0
         self._rh_lost = 0
 
-    def update(self, raw_kp: np.ndarray) -> np.ndarray:
-        """Apply bounded persistence to a fresh nose-normalised keypoint.
+    def update(self, lh: np.ndarray, rh: np.ndarray, pose: np.ndarray,
+               lh_detected: bool, rh_detected: bool) -> np.ndarray:
+        """Apply bounded persistence to raw landmark arrays.
 
         Parameters
         ----------
-        raw_kp : np.ndarray, shape (258,)
-            Keypoint from _extract_258_nose_normalized().
+        lh, rh, pose : np.ndarray
+            Raw coordinate arrays from ``_extract_258_raw()``.
+        lh_detected, rh_detected : bool
+            Whether MediaPipe found each hand in this frame.
 
         Returns
         -------
-        Unified keypoint with persisted hands, shape (258,).
+        Unified keypoint with persisted hands, shape (258,).  Caller
+        should then apply ``_normalize()`` before feeding to the model.
         """
-        # Split the 258-dim vector into components
-        lh = raw_kp[:_LH_DIM].copy()
-        rh = raw_kp[_LH_DIM:_LH_DIM + _RH_DIM].copy()
-        pose = raw_kp[_LH_DIM + _RH_DIM:].copy()
-
-        # Detect whether each hand was present in this frame.
-        # A hand is "present" if any landmark has non-zero coordinates
-        # (after nose-normalisation, the nose itself is at (0,0,0) so
-        # hand landmarks should be distinctly non-zero when detected).
-        lh_present = np.any(np.abs(lh) > 1e-6)
-        rh_present = np.any(np.abs(rh) > 1e-6)
-
         # Left hand
-        if lh_present:
+        if lh_detected:
             self._last_lh = lh.copy()
             self._lh_lost = 0
         else:
             self._lh_lost += 1
 
         # Right hand
-        if rh_present:
+        if rh_detected:
             self._last_rh = rh.copy()
             self._rh_lost = 0
         else:
@@ -378,10 +383,15 @@ def run():
 
             draw_landmarks(frame, results)
 
-            # --- Extract nose-normalised keypoints with bounded persistence ---
-            raw_kp = _extract_258_nose_normalized(results)
-            unified_kp = persistence.update(raw_kp)
-            frame_buffer.append(unified_kp)
+            # --- Extract raw keypoints, persist, THEN nose-normalise ---
+            # Order matches production converter.py: persist raw → normalise,
+            # so undetected hands decay to zeros before nose-offset is applied.
+            lh, rh, pose, lh_det, rh_det = _extract_258_raw(results)
+            persisted = persistence.update(lh, rh, pose, lh_det, rh_det)
+            normalised_kp = _normalize(persisted[:_LH_DIM],
+                                       persisted[_LH_DIM:_LH_DIM + _RH_DIM],
+                                       persisted[_LH_DIM + _RH_DIM:])
+            frame_buffer.append(normalised_kp)
 
             hand_ok = persistence.any_hand_alive
 
