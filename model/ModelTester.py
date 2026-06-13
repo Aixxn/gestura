@@ -348,6 +348,10 @@ def run():
     smoothed   = ""
     prev_time  = time.time()
 
+    # Track hand state transitions — clear buffer only when hands REAPPEAR
+    # (start of a new session), not when they disappear (let buffer drain naturally)
+    _prev_hand_ok = True
+
     # Bounded persistence state — survives brief MediaPipe flicker
     persistence = BoundedPersistence(persist_window=PERSIST_WINDOW)
 
@@ -381,7 +385,20 @@ def run():
 
             hand_ok = persistence.any_hand_alive
 
-            if len(frame_buffer) == SEQ_LENGTH and hand_ok:
+            # Clear buffer only when hands REAPPEAR (new signing session),
+            # not when they disappear (let buffer drain naturally so the
+            # model transitions to BACKGROUND on zero/persisted input).
+            if hand_ok and not _prev_hand_ok:
+                frame_buffer.clear()
+                pred_history.clear()
+                persistence.reset()
+                label      = ""
+                confidence = 0.0
+                top_preds  = []
+                smoothed   = ""
+            _prev_hand_ok = hand_ok
+
+            if len(frame_buffer) == SEQ_LENGTH:
                 seq = np.array(frame_buffer, dtype=np.float32)          # (35, 258)
                 # Normalise variable-length → fixed-length (35)
                 seq_list = normalize_frames(seq.tolist(), SEQ_LENGTH)
@@ -396,22 +413,16 @@ def run():
                 confidence = float(preds[best])
                 label      = sign_classes[best]
 
-                if confidence >= CONFIDENCE_THRESH:
+                # BACKGROUND means no sign happening — don't treat it as a word
+                if label == "BACKGROUND":
+                    smoothed = ""
+                elif confidence >= CONFIDENCE_THRESH:
                     pred_history.append(label)
                     if len(pred_history) == SMOOTH_WINDOW:
                         smoothed = collections.Counter(pred_history).most_common(1)[0][0]
                 else:
                     pred_history.clear()
                     smoothed = ""
-
-            elif not hand_ok:
-                frame_buffer.clear()
-                pred_history.clear()
-                persistence.reset()
-                label      = ""
-                confidence = 0.0
-                top_preds  = []
-                smoothed   = ""
 
             now       = time.time()
             fps       = 1.0 / max(now - prev_time, 1e-6)
