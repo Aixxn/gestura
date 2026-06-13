@@ -426,6 +426,16 @@ def run():
                 # BACKGROUND means no sign happening — don't treat it as a word
                 if label == "BACKGROUND":
                     smoothed = ""
+                elif not hand_ok:
+                    # No hands visible for PERSIST_WINDOW+ frames — model should
+                    # predict BACKGROUND but may not (training data for the
+                    # "pose visible, no hands" case uses -nose_xyz in hand
+                    # columns, which differs from the old zeroed-hand samples).
+                    # Override to avoid false word predictions during idle.
+                    label = "No sign"
+                    confidence = 0.0
+                    top_preds = []
+                    smoothed = ""
                 elif confidence >= CONFIDENCE_THRESH:
                     pred_history.append(label)
                     if len(pred_history) == SMOOTH_WINDOW:

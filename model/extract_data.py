@@ -67,7 +67,6 @@ _LH_DIM = 63
 _RH_DIM = 63
 _POSE_DIM = 132
 PERSIST_WINDOW = 5  # match converter.py bounded persistence duration
-NUM_BACKGROUND_SAMPLES = 250  # total background samples to generate
 
 # ---------------------------------------------------------------------------
 # Supported video extensions
@@ -124,6 +123,16 @@ class BoundedPersistenceExtractor:
         self._last_rh = np.zeros(_RH_DIM, dtype=np.float32)
         self._lh_lost = 0
         self._rh_lost = 0
+
+    @property
+    def is_idle_frame(self) -> bool:
+        """True if the MOST RECENTLY PROCESSED frame had pose visible but no hands.
+
+        *Both* hands must have been absent for >= PERSIST_WINDOW frames so
+        that bounded persistence has already decayed to zeros.
+        """
+        return (self._lh_lost >= PERSIST_WINDOW
+                and self._rh_lost >= PERSIST_WINDOW)
 
     def process_frame(self, frame: np.ndarray) -> np.ndarray:
         """Run MediaPipe + bounded persistence + nose normalisation.
@@ -188,8 +197,21 @@ class BoundedPersistenceExtractor:
         return np.concatenate([lh, rh, pose]).astype(np.float32)
 
 
-def extract_video(video_path: str, extractor: BoundedPersistenceExtractor) -> np.ndarray | None:
+def extract_video(video_path: str, extractor: BoundedPersistenceExtractor,
+                  background_segments: list[np.ndarray] | None = None) -> np.ndarray | None:
     """Run MediaPipe on every frame of *video_path* with bounded persistence.
+
+    Parameters
+    ----------
+    video_path : str
+        Path to the video file.
+    extractor : BoundedPersistenceExtractor
+        Reusable extractor (will be reset internally).
+    background_segments : list or None
+        If provided, idle segments (pose visible, no hands for >= PERSIST_WINDOW
+        frames) of at least WINDOW_SIZE consecutive frames are appended here as
+        BACKGROUND training samples.  These use the exact same -nose_xyz hand
+        pattern that inference produces.
 
     Returns
     -------
@@ -204,6 +226,9 @@ def extract_video(video_path: str, extractor: BoundedPersistenceExtractor) -> np
     extractor.reset()
     frames: list[np.ndarray] = []
 
+    # Idle-segment tracking for background collection
+    _bg_buf: list[np.ndarray] = []
+
     while True:
         ret, frame = cap.read()
         if not ret:
@@ -215,7 +240,21 @@ def extract_video(video_path: str, extractor: BoundedPersistenceExtractor) -> np
             continue
         frames.append(kp)
 
+        # Collect idle frames as potential BACKGROUND samples
+        if background_segments is not None:
+            if extractor.is_idle_frame:
+                _bg_buf.append(kp)
+            else:
+                # Idle segment ended — save if long enough
+                if len(_bg_buf) >= WINDOW_SIZE:
+                    background_segments.append(np.array(_bg_buf, dtype=np.float32))
+                _bg_buf.clear()
+
     cap.release()
+
+    # Flush remaining idle segment at end of video
+    if background_segments is not None and len(_bg_buf) >= WINDOW_SIZE:
+        background_segments.append(np.array(_bg_buf, dtype=np.float32))
 
     if not frames:
         print(f"  ⚠️  No frames extracted from {video_path}")
@@ -224,80 +263,38 @@ def extract_video(video_path: str, extractor: BoundedPersistenceExtractor) -> np
     return np.array(frames, dtype=np.float32)
 
 
-def generate_background(output_dir: str, existing_samples_dir: str | None = None) -> int:
-    """Generate synthetic BACKGROUND class samples.
+def _generate_background_synthetic(bg_dir: str) -> int:
+    """Generate synthetic BACKGROUND samples that don't need video input.
 
-    Types of samples produced (total = NUM_BACKGROUND_SAMPLES):
-      1. All-zero keypoints — simulates empty frame, no person visible
-      2. All-zero + small Gaussian noise — camera noise simulation
-      3. Pose-only — hand columns zeroed from real sign samples
-      4. Pose-only + small noise — same with added jitter
+    These cover the "empty frame" cases (no person visible).  The
+    "person visible, not signing" case is handled by idle segments
+    collected during the main extraction (see ``background_segments``).
 
-    Parameters
-    ----------
-    output_dir : str
-        Directory where ``BACKGROUND/`` subdir will be written.
-    existing_samples_dir : str or None
-        If provided, real sign samples from this directory are used
-        to produce pose-only background variants (hand columns zeroed).
+    Types:
+      1. All-zero keypoints — empty frame, no person visible
+      2. All-zero + small Gaussian noise — camera noise
 
     Returns
     -------
     int  Number of background samples saved.
     """
-    bg_dir = os.path.join(output_dir, "BACKGROUND")
     os.makedirs(bg_dir, exist_ok=True)
-
-    # Scratch space for real-samples used in pose-only generation
-    real_samples: list[np.ndarray] = []
-    if existing_samples_dir and os.path.isdir(existing_samples_dir):
-        for cls_dir in os.listdir(existing_samples_dir):
-            cls_path = os.path.join(existing_samples_dir, cls_dir)
-            if not os.path.isdir(cls_path) or cls_dir == "BACKGROUND":
-                continue
-            for fname in os.listdir(cls_path):
-                if not fname.endswith(".npy"):
-                    continue
-                try:
-                    arr = np.load(os.path.join(cls_path, fname))
-                    if arr.shape == (WINDOW_SIZE, FEATURE_DIM):
-                        real_samples.append(arr)
-                except Exception:
-                    pass
-
     rng = np.random.default_rng(seed=42)
     saved = 0
 
-    # 1. All-zero samples
     zero_base = np.zeros((WINDOW_SIZE, FEATURE_DIM), dtype=np.float32)
+
+    # All-zero samples
     for i in range(50):
         np.save(os.path.join(bg_dir, f"zero_{i}.npy"), zero_base)
         saved += 1
 
-    # 2. All-zero + noise
+    # All-zero + noise
     for i in range(50):
         noise = rng.normal(0, 0.005, (WINDOW_SIZE, FEATURE_DIM)).astype(np.float32)
         np.save(os.path.join(bg_dir, f"zero_noise_{i}.npy"), zero_base + noise)
         saved += 1
 
-    # 3. Pose-only (hands zeroed) from real samples
-    n_pose = min(100, max(1, len(real_samples)))
-    chosen = rng.choice(len(real_samples), size=n_pose, replace=False)
-    for i, idx in enumerate(chosen):
-        pose_only = real_samples[idx].copy()
-        pose_only[:, :126] = 0.0  # zero out left + right hand columns
-        np.save(os.path.join(bg_dir, f"pose_{i}.npy"), pose_only)
-        saved += 1
-
-    # 4. Pose-only + noise
-    noise_std = 0.003
-    for i, idx in enumerate(chosen[:50]):
-        pose_only = real_samples[idx].copy()
-        pose_only[:, :126] = rng.normal(0, noise_std, (WINDOW_SIZE, 126)).astype(np.float32)
-        np.save(os.path.join(bg_dir, f"pose_noise_{i}.npy"), pose_only)
-        saved += 1
-
-    print(f"\n  BACKGROUND → {saved} samples saved ({bg_dir})")
     return saved
 
 
@@ -346,12 +343,16 @@ def process_videos(
     total_saved = 0
     total_skipped = 0
 
+    # Collect idle segments from videos as BACKGROUND samples
+    # (pose visible, no hands for >= PERSIST_WINDOW — produces correct -nose_xyz)
+    background_segments: list[np.ndarray] = []
+
     for sign_name in sign_classes:
-        if sign_name.upper() not in _TARGET_CLASSES:
-            print(f"\nSkipping '{sign_name}' — not in target vocabulary")
+        sign_input = os.path.join(input_dir, sign_name)
+        if not os.path.isdir(sign_input):
+            print(f"\n  ⚠️  '{sign_name}' is not a directory, skipping")
             continue
 
-        sign_input = os.path.join(input_dir, sign_name)
         sign_output = os.path.join(output_dir, sign_name)
         os.makedirs(sign_output, exist_ok=True)
 
@@ -366,6 +367,82 @@ def process_videos(
 
         print(f"\n{'='*60}")
         print(f"  {sign_name}  ({len(video_files)} videos)")
+        print(f"{'='*60}")
+
+        saved = 0
+        skipped = 0
+
+        for i, video_name in enumerate(video_files):
+            video_path = os.path.join(sign_input, video_name)
+            # Pass background_segments when --generate-background is active
+            bg_list = background_segments if generate_bg else None
+            seq = extract_video(video_path, extractor, background_segments=bg_list)
+
+            if seq is None:
+                skipped += 1
+                continue
+
+            if len(seq) < min_frames:
+                print(f"  ⚠️  '{video_name}' too short ({len(seq)} frames, need ≥{min_frames})")
+                skipped += 1
+                continue
+
+            # Normalise variable-length sequence to WINDOW_SIZE (35) frames
+            seq_list = normalize_frames(seq.tolist(), WINDOW_SIZE)
+            normalized = np.array(seq_list, dtype=np.float32)
+
+            # Validate shape
+            assert normalized.shape == (WINDOW_SIZE, FEATURE_DIM), (
+                f"Expected ({WINDOW_SIZE}, {FEATURE_DIM}), got {normalized.shape}"
+            )
+
+            out_path = os.path.join(sign_output, f"{i}.npy")
+            np.save(out_path, normalized)
+            saved += 1
+
+            if saved % 10 == 0 or saved == len(video_files):
+                print(f"  ✓ {saved}/{len(video_files)} saved"
+                      f"{'  (last: ' + video_name + ')' if saved % 10 == 0 else ''}")
+
+        total_saved += saved
+        total_skipped += skipped
+        print(f"  ──> {saved} saved, {skipped} skipped")
+
+    print(f"\n{'='*60}")
+    print(f"  Extraction done: {total_saved} files saved, {total_skipped} skipped")
+    print(f"{'='*60}")
+
+    # Background generation (runs after all sign extraction)
+    if generate_bg:
+        print("\nGenerating BACKGROUND class samples...")
+
+        # 1. Save idle segments collected during extraction
+        bg_dir = os.path.join(output_dir, "BACKGROUND")
+        os.makedirs(bg_dir, exist_ok=True)
+        bg_from_video = 0
+        for idx, seg in enumerate(background_segments):
+            # Truncate or split long segments into WINDOW_SIZE chunks
+            for chunk_i in range(0, len(seg), WINDOW_SIZE):
+                chunk = seg[chunk_i:chunk_i + WINDOW_SIZE]
+                if len(chunk) < WINDOW_SIZE:
+                    continue
+                # Normalise to fixed length (usually already WINDOW_SIZE)
+                chunk_list = normalize_frames(chunk.tolist(), WINDOW_SIZE)
+                chunk = np.array(chunk_list, dtype=np.float32)
+                if chunk.shape == (WINDOW_SIZE, FEATURE_DIM):
+                    np.save(os.path.join(bg_dir, f"idle_{idx}_{chunk_i // WINDOW_SIZE}.npy"), chunk)
+                    bg_from_video += 1
+
+        print(f"  Idle segments from videos → {bg_from_video} samples")
+
+        # 2. Synthetic samples (all-zero and zero+noise only —
+        #    pose-only with zeroed hands was incorrect; idle segments above
+        #    give the correct -nose_xyz pattern)
+        synthetic_saved = _generate_background_synthetic(bg_dir)
+        total_bg = bg_from_video + synthetic_saved
+        print(f"  Synthetic → {synthetic_saved} samples")
+        print(f"\n{'='*60}")
+        print(f"  Total: {total_saved} sign + {total_bg} background")
         print(f"{'='*60}")
 
         saved = 0
