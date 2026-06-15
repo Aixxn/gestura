@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Live ASL inference with bounded persistence.
+Live ASL inference with bounded persistence and EMA smoothing.
 
 Uses the same nose-normalised, bounded-persistence keypoint extraction as the
 production converter (translationService/converter.py) so that live webcam
@@ -66,19 +66,12 @@ BAR_BG       = (40, 40, 40)
 mp_draw   = mp.solutions.drawing_utils
 mp_holistic = mp.solutions.holistic
 
-
 # ------------------------------------------------------------------ #
 #  Nose-normalised keypoint extraction                                 #
 # ------------------------------------------------------------------ #
 
 def _extract_258_raw(results) -> tuple[np.ndarray, np.ndarray, np.ndarray, bool, bool]:
-    """Extract raw (un-normalised) keypoint components from MediaPipe result.
-
-    Returns
-    -------
-    lh, rh, pose : np.ndarray  Raw coordinate arrays (not nose-normalised).
-    lh_detected, rh_detected : bool  Whether each hand was found by MediaPipe.
-    """
+    """Extract raw (un-normalised) keypoint components from MediaPipe result."""
     lh = np.zeros(_LH_DIM, dtype=np.float32)
     lh_detected = False
     if results.left_hand_landmarks:
@@ -110,14 +103,9 @@ def _extract_258_raw(results) -> tuple[np.ndarray, np.ndarray, np.ndarray, bool,
 
     return lh, rh, pose, lh_detected, rh_detected
 
-
 def _normalize(lh: np.ndarray, rh: np.ndarray, pose: np.ndarray) -> np.ndarray:
-    """Apply nose-normalisation to raw component arrays.
-
-    Returns a unified (258,) keypoint vector matching the training format.
-    """
+    """Apply nose-normalisation to raw component arrays."""
     nose_xyz = pose[0:3] if np.any(pose != 0) else np.zeros(3, dtype=np.float32)
-    # Normalise all components relative to the nose
     lh = (lh.reshape(-1, 3) - nose_xyz).flatten()
     rh = (rh.reshape(-1, 3) - nose_xyz).flatten()
     p = pose.copy().reshape(-1, 4)
@@ -125,28 +113,12 @@ def _normalize(lh: np.ndarray, rh: np.ndarray, pose: np.ndarray) -> np.ndarray:
     pose = p.flatten()
     return np.concatenate([lh, rh, pose]).astype(np.float32)
 
-
 # ------------------------------------------------------------------ #
 #  Bounded persistence state                                           #
 # ------------------------------------------------------------------ #
 
 class BoundedPersistence:
-    """Last-known hand positions fill in during brief MediaPipe flicker.
-
-    Operates on RAW (un-normalised) coordinates.  Nose-normalisation is
-    applied AFTER persistence, matching the production converter pipeline.
-
-    Each hand has its own lost-frame counter:
-    - Hand detected       → update cache, reset counter to 0.
-    - Hand lost (< limit) → return cached (persisted) position.
-    - Hand lost (≥ limit) → return zeros (genuinely absent).
-
-    The ``lh_detected`` / ``rh_detected`` flags come directly from
-    MediaPipe's detection result, NOT from a threshold on the normalised
-    values (which can falsely indicate a hand is present when a person
-    is visible but not signing — see nose-normalisation of zero hands).
-    """
-
+    """Last-known hand positions fill in during brief MediaPipe flicker."""
     def __init__(self, persist_window: int = PERSIST_WINDOW):
         self.persist_window = persist_window
         self.reset()
@@ -159,35 +131,18 @@ class BoundedPersistence:
 
     def update(self, lh: np.ndarray, rh: np.ndarray, pose: np.ndarray,
                lh_detected: bool, rh_detected: bool) -> np.ndarray:
-        """Apply bounded persistence to raw landmark arrays.
-
-        Parameters
-        ----------
-        lh, rh, pose : np.ndarray
-            Raw coordinate arrays from ``_extract_258_raw()``.
-        lh_detected, rh_detected : bool
-            Whether MediaPipe found each hand in this frame.
-
-        Returns
-        -------
-        Unified keypoint with persisted hands, shape (258,).  Caller
-        should then apply ``_normalize()`` before feeding to the model.
-        """
-        # Left hand
         if lh_detected:
             self._last_lh = lh.copy()
             self._lh_lost = 0
         else:
             self._lh_lost += 1
 
-        # Right hand
         if rh_detected:
             self._last_rh = rh.copy()
             self._rh_lost = 0
         else:
             self._rh_lost += 1
 
-        # Build unified vector with bounded persistence
         if self._lh_lost < self.persist_window:
             lh_out = self._last_lh.copy()
         else:
@@ -202,9 +157,7 @@ class BoundedPersistence:
 
     @property
     def any_hand_alive(self) -> bool:
-        """At least one hand is freshly detected or within the persistence window."""
         return self._lh_lost < self.persist_window or self._rh_lost < self.persist_window
-
 
 # ------------------------------------------------------------------ #
 #  Drawing helpers                                                     #
@@ -219,16 +172,13 @@ def draw_progress_bar(img, x, y, w, h, value, bar_color=BAR_COLOR, show_threshol
         thresh_x = x + int(w * CONFIDENCE_THRESH)
         cv.line(img, (thresh_x, y - 2), (thresh_x, y + h + 2), (255, 255, 255), 1)
 
-
 def put_text(img, text, pos, scale, color, thickness=1):
     x, y = pos
     cv.putText(img, text, (x + 1, y + 1), FONT, scale,
                (0, 0, 0), thickness + 1, cv.LINE_AA)
     cv.putText(img, text, pos, FONT, scale, color, thickness, cv.LINE_AA)
 
-
 def draw_landmarks(img, results):
-    """Draw MediaPipe landmarks using the old-API result object (raw)."""
     if results.left_hand_landmarks:
         mp_draw.draw_landmarks(
             img, results.left_hand_landmarks,
@@ -250,13 +200,7 @@ def draw_landmarks(img, results):
             mp_draw.DrawingSpec(color=(60, 60, 60), thickness=1, circle_radius=1),
             mp_draw.DrawingSpec(color=(40, 40, 40), thickness=1))
 
-
-# ------------------------------------------------------------------ #
-#  HUD                                                                 #
-# ------------------------------------------------------------------ #
-
-def draw_hud(frame, label, confidence, top_preds, buf_len,
-             smoothed, fps, hand_ok):
+def draw_hud(frame, label, confidence, top_preds, buf_len, smoothed, fps, hand_ok):
     h, w = frame.shape[:2]
     panel_w = 290
     px      = w - panel_w
@@ -326,10 +270,28 @@ def draw_hud(frame, label, confidence, top_preds, buf_len,
                       show_threshold=True)
     put_text(frame, f"THRESH {int(CONFIDENCE_THRESH*100)}%", (12, meter_y + 22), 0.38, COLOR_DIM)
 
+# ------------------------------------------------------------------ #
+#  Smoother & Main loop                                                #
+# ------------------------------------------------------------------ #
 
-# ------------------------------------------------------------------ #
-#  Main loop                                                           #
-# ------------------------------------------------------------------ #
+class ExponentialMovingAverage:
+    """Smooths out webcam micro-jitter to prevent static signs from looking like motion."""
+    def __init__(self, alpha=0.1):
+        # alpha=1.0 is no smoothing. alpha=0.1 is heavy smoothing.
+        self.alpha = alpha
+        self.state = None
+
+    def reset(self):
+        self.state = None
+
+    def update(self, current_val):
+        if self.state is None:
+            self.state = current_val.copy()
+            return current_val.copy()
+        
+        # Blend the new frame with the old frames to kill the jitter
+        self.state = self.alpha * current_val + (1.0 - self.alpha) * self.state
+        return self.state
 
 def run():
     cap = cv.VideoCapture(0, cv.CAP_V4L2)
@@ -353,12 +315,10 @@ def run():
     smoothed   = ""
     prev_time  = time.time()
 
-    # Track hand state transitions — clear buffer only when hands REAPPEAR
-    # (start of a new session), not when they disappear (let buffer drain naturally)
+    # Track hand state transitions
     _prev_hand_ok = True
-
-    # Bounded persistence state — survives brief MediaPipe flicker
     persistence = BoundedPersistence(persist_window=PERSIST_WINDOW)
+    smoother = ExponentialMovingAverage(alpha=0.4) 
 
     print("Inference running. Press Q to quit.")
 
@@ -384,24 +344,23 @@ def run():
             draw_landmarks(frame, results)
 
             # --- Extract raw keypoints, persist, THEN nose-normalise ---
-            # Order matches production converter.py: persist raw → normalise,
-            # so undetected hands decay to zeros before nose-offset is applied.
             lh, rh, pose, lh_det, rh_det = _extract_258_raw(results)
             persisted = persistence.update(lh, rh, pose, lh_det, rh_det)
             normalised_kp = _normalize(persisted[:_LH_DIM],
                                        persisted[_LH_DIM:_LH_DIM + _RH_DIM],
                                        persisted[_LH_DIM + _RH_DIM:])
-            frame_buffer.append(normalised_kp)
+            
+            # Apply EMA smoothing to iron out the micro-jitter
+            smoothed_kp = smoother.update(normalised_kp)
+            frame_buffer.append(smoothed_kp)
 
             hand_ok = persistence.any_hand_alive
 
-            # Clear buffer only when hands REAPPEAR (new signing session),
-            # not when they disappear (let buffer drain naturally so the
-            # model transitions to BACKGROUND on zero/persisted input).
             if hand_ok and not _prev_hand_ok:
                 frame_buffer.clear()
                 pred_history.clear()
                 persistence.reset()
+                smoother.reset()
                 label      = ""
                 confidence = 0.0
                 top_preds  = []
@@ -409,11 +368,10 @@ def run():
             _prev_hand_ok = hand_ok
 
             if len(frame_buffer) == SEQ_LENGTH:
-                seq = np.array(frame_buffer, dtype=np.float32)          # (35, 258)
-                # Normalise variable-length → fixed-length (35)
+                seq = np.array(frame_buffer, dtype=np.float32)
                 seq_list = normalize_frames(seq.tolist(), SEQ_LENGTH)
                 seq = np.array(seq_list, dtype=np.float32)
-                inp = seq[np.newaxis]                                    # (1, 35, 258)
+                inp = seq[np.newaxis]
 
                 preds     = model.predict(inp, verbose=0)[0]
                 top_idx   = np.argsort(preds)[::-1]
@@ -423,15 +381,9 @@ def run():
                 confidence = float(preds[best])
                 label      = sign_classes[best]
 
-                # BACKGROUND means no sign happening — don't treat it as a word
                 if label == "BACKGROUND":
                     smoothed = ""
                 elif not hand_ok:
-                    # No hands visible for PERSIST_WINDOW+ frames — model should
-                    # predict BACKGROUND but may not (training data for the
-                    # "pose visible, no hands" case uses -nose_xyz in hand
-                    # columns, which differs from the old zeroed-hand samples).
-                    # Override to avoid false word predictions during idle.
                     label = "No sign"
                     confidence = 0.0
                     top_preds = []
@@ -458,7 +410,6 @@ def run():
     cap.release()
     cv.destroyAllWindows()
     print("Stopped.")
-
 
 # ------------------------------------------------------------------ #
 #  Load model and classes                                              #
