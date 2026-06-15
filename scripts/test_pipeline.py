@@ -286,30 +286,25 @@ def run():
             print(f"  Extraction error: {e}")
             continue
 
-        if converter.is_idle:
-            md.reset()
-            continue
+        if not converter.is_idle:
+            sign_ended, completed_sign = md.update(kp)
 
-        sign_ended, completed_sign = md.update(kp)
+            if sign_ended and completed_sign is not None:
+                kp_list = [k.tolist() for k in completed_sign]
+                word, conf = predict_word(kp_list)
 
-        if sign_ended and completed_sign is not None:
-            kp_list = [k.tolist() for k in completed_sign]
-            word, conf = predict_word(kp_list)
+                # Skip BACKGROUND predictions — they are not real signs
+                if word == "BACKGROUND":
+                    continue
 
-            # Skip BACKGROUND predictions — they are not real signs
-            if word == "BACKGROUND":
-                continue
+                words.append(word)
+                last_word = word
+                last_conf = conf
+                word_ttl = 60
 
-            words.append(word)
-            last_word = word
-            last_conf = conf
-            word_ttl = 60
-
-            model_status = "MODEL_LOADED" if model is not None else "MODEL_NONE"
-            print(f"  -> Sign #{len(words)-1}: {word}  ({conf:.0%})  [{model_status}]")
-            print(f"     Gloss so far: {' '.join(words)}")
-
-        # ---- Draw landmarks ----
+                model_status = "MODEL_LOADED" if model is not None else "MODEL_NONE"
+                print(f"  -> Sign #{len(words)-1}: {word}  ({conf:.0%})  [{model_status}]")
+                print(f"     Gloss so far: {' '.join(words)}")
         converter.draw_landmarks(frame)
 
         # ---- HUD overlay ----
