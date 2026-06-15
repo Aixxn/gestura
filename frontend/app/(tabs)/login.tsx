@@ -27,7 +27,7 @@ const Login = () => {
     setIsLoading(true);
     try {
       await loginUser({ email, password });
-      router.push('/(tabs)/camera');
+      router.replace('/(tabs)/camera');
     } catch (error) {
       const message =
         error instanceof Error ? error.message : 'Login failed. Try again.';

@@ -1,19 +1,13 @@
 import { Camera, useCameraDevice, useCameraPermission } from 'react-native-vision-camera';
 import { useState, useRef, useCallback, useEffect } from 'react';
-import { Image, ImageBackground, Text, TouchableOpacity, View} from 'react-native';
+import { Image, Text, TouchableOpacity, View} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { cameraStyles } from '../../constants/styles';
 import * as Speech from 'expo-speech';
 import * as Haptics from 'expo-haptics';
 import { useGesturaAPI } from '../../hooks/useGesturaAPI';
 import { useGesturaWebSocket } from '../../hooks/useGesturaWebSocket';
-
-interface CapturedFrame {
-  id: string;
-  width: number;
-  height: number;
-  timestamp: number;
-}
+import { getToken } from '../../services/token';
 
 interface QueuedFrame {
   id: string;
@@ -27,7 +21,7 @@ export default function CameraComponent() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [isFrontCamera, setIsFrontCamera] = useState(true);
   const [cameraError, setCameraError] = useState<string | null>(null);
-  const [capturedFrames, setCapturedFrames] = useState<CapturedFrame[]>([]);
+  const [captureStatus, setCaptureStatus] = useState<string | null>(null);
   
   const device = useCameraDevice(isFrontCamera ? 'front' : 'back');
   const camera = useRef<Camera>(null);
@@ -50,6 +44,7 @@ export default function CameraComponent() {
     isSending,
     lastStatus,
     clearSession,
+    error: apiError,
   } = useGesturaAPI();
 
   // WebSocket integration (for receiving translations)
@@ -125,6 +120,7 @@ export default function CameraComponent() {
     }
 
     isProcessingQueue.current = true;
+    setCaptureStatus('Uploading frames...');
 
     while (frameQueue.current.length > 0) {
       // Take up to CONCURRENT_UPLOADS frames from queue for parallel processing
@@ -155,6 +151,7 @@ export default function CameraComponent() {
     }
 
     isProcessingQueue.current = false;
+    setCaptureStatus(isStopping.current ? 'Finalizing translation...' : null);
     
     // If we're stopping and queue is empty, complete the stop process
     if (isStopping.current && frameQueue.current.length === 0) {
@@ -192,7 +189,7 @@ export default function CameraComponent() {
       }
       
       captureIntervalRef.current = setInterval(async () => {
-        if (!camera.current || isStopping.current) return;
+        if (!camera.current || isStopping.current || !sessionUUID) return;
 
         try {
           // Take photo from camera
@@ -201,29 +198,24 @@ export default function CameraComponent() {
             enableShutterSound: false,
           });
 
-          // Update frame count and display
-          const newFrame: CapturedFrame = {
-            id: `frame_${frameCount.current}`,
-            width: 1920, // Default camera resolution
-            height: 1080,
-            timestamp: Date.now(),
-          };
+          const frameId = `frame_${frameCount.current}`;
+          const timestamp = Date.now();
           
           frameCount.current++;
-          setCapturedFrames(prev => [...prev.slice(-9), newFrame]);
-          console.log(`Frame captured: ${newFrame.width}x${newFrame.height} - Total: ${frameCount.current}`);
+          console.log(`Frame captured: ${frameId} - Total: ${frameCount.current}`);
 
           // Add frame to queue instead of sending directly
           if (photo && sessionUUID) {
             const queuedFrame: QueuedFrame = {
-              id: newFrame.id,
+              id: frameId,
               path: photo.path,
-              timestamp: newFrame.timestamp,
+              timestamp,
             };
             addFrameToQueue(queuedFrame);
           }
         } catch (error) {
           console.error('Failed to capture frame:', error);
+          setCaptureStatus('Failed to capture frame');
         }
       }, 500);
     } else {
@@ -322,7 +314,20 @@ export default function CameraComponent() {
 
   const handleTapToStart = async () => {
     const newActiveState = !isActive;
-    
+    const token = getToken();
+
+    if (newActiveState && !token) {
+      setCameraError('Please log in before starting translation.');
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      return;
+    }
+
+    if (newActiveState && !sessionUUID) {
+      setCameraError('Camera session is still initializing. Try again in a moment.');
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+      return;
+    }
+
     // Provide haptic feedback based on action
     if (newActiveState) {
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -336,7 +341,7 @@ export default function CameraComponent() {
     if (newActiveState) {
       // Starting detection
       isStopping.current = false;
-      setCapturedFrames([]);
+      setCaptureStatus('Starting capture...');
       frameCount.current = 0;
       frameQueue.current = []; // Clear any existing queue
       clearTranslation();
@@ -349,6 +354,7 @@ export default function CameraComponent() {
       console.log(`Stopping capture. Processing ${frameQueue.current.length} remaining frames in queue...`);
       isStopping.current = true;
       setIsTranslating(true);
+      setCaptureStatus('Stopping capture...');
       
       // Wait for queue to be fully processed
       const checkQueueEmpty = setInterval(async () => {
@@ -359,7 +365,12 @@ export default function CameraComponent() {
           // Now stop the backend processing
           const result = await stopProcessing();
           setIsTranslating(false);
-          console.log('Backend processing stopped', result);
+          if (result.success) {
+            setCaptureStatus(null);
+            console.log('Backend processing stopped');
+          } else {
+            setCaptureStatus(result.error || 'Failed to stop backend processing');
+          }
         } else {
           console.log(`Waiting for queue to empty... ${frameQueue.current.length} frames remaining`);
         }
@@ -403,31 +414,46 @@ export default function CameraComponent() {
     console.log('Translate functionality');
   };
 
+  const isFinishingSession = captureStatus === 'Stopping capture...' || captureStatus === 'Finalizing translation...';
+  const connectionLabel = isConnected ? 'Connected' : isConnecting ? 'Connecting' : 'Offline';
+  const sessionStatus = isFinishingSession
+    ? 'Processing...'
+    : isActive
+      ? 'Listening...'
+      : translation
+        ? 'Translation ready'
+        : 'Ready to translate';
+  const sessionHint = isActive
+    ? 'Keep signing clearly inside the guide'
+    : translation
+      ? 'Tap Start to translate again'
+      : 'Place your hands inside the frame';
+  const actionLabel = isFinishingSession ? 'Finishing...' : isActive ? 'Stop' : 'Start';
+  const actionAccessibilityLabel = isActive ? 'Stop translation' : 'Start translation';
+
   return (
     <SafeAreaView style={{ flex: 1 }}>
       <View style={cameraStyles.container}>
-        <ImageBackground 
-          source={require('../../images/Camera-bg.png')} 
-          style={cameraStyles.backgroundImage}
-          resizeMode="cover"
-        >
-        <View style={cameraStyles.cameraContainer}>
-          <View style={cameraStyles.cameraFrame}>
-        <Camera
-        ref={camera}
-        style={{ flex: 1 }}
-        device={device}
-        isActive={true}                
-        video={true}
-        photo={true}
-        audio={false}
-        onError={onError}
-        />
-          </View>
-        </View>
-        
         <View style={cameraStyles.topOverlay}>
-          <Text style={cameraStyles.statusText}>Gestura</Text>
+          <View>
+            <Text style={cameraStyles.statusText}>Gestura</Text>
+            <Text style={cameraStyles.subtitleText}>Live sign translator</Text>
+          </View>
+          <View style={cameraStyles.topActions}>
+            <View
+              style={[
+                cameraStyles.connectionPill,
+                isConnected ? cameraStyles.connectionPillConnected : cameraStyles.connectionPillOffline,
+              ]}
+            >
+              <View
+                style={[
+                  cameraStyles.connectionDot,
+                  isConnected ? cameraStyles.connectionDotConnected : cameraStyles.connectionDotOffline,
+                ]}
+              />
+              <Text style={cameraStyles.connectionText}>{connectionLabel}</Text>
+            </View>
           <TouchableOpacity 
             style={cameraStyles.cameraFlipButton} 
             onPress={() => {
@@ -447,53 +473,57 @@ export default function CameraComponent() {
               accessibilityIgnoresInvertColors={true}
             />
           </TouchableOpacity>
+          </View>
         </View>
 
-        {/* Frame Processing Status Display */}
-        {isActive && (
-          <View 
-            style={[
-              cameraStyles.statusDisplayContainer,
-              isConnected ? cameraStyles.statusDisplayConnected : cameraStyles.statusDisplayDisconnected
-            ]}
-            accessible={true}
-            accessibilityRole="text"
-            accessibilityLabel={`Connection status: ${
-              isConnected ? 'Connected' : isConnecting ? 'Connecting' : 'Disconnected'
-            }. Captured ${frameCount.current} frames. Queue size ${frameQueue.current.length} of ${MAX_QUEUE_SIZE}`}
-            accessibilityLiveRegion="polite"
-          >
-            <Text style={cameraStyles.statusDisplayTitle}>
-              {isConnected ? 'CONNECTED' : isConnecting ? 'CONNECTING' : 'DISCONNECTED'} - Frames: {frameCount.current}
-            </Text>
-            <Text style={cameraStyles.statusDisplaySession}>
-              Session: {sessionUUID.substring(0, 8)}... | Queue: {frameQueue.current.length}/{MAX_QUEUE_SIZE}
-            </Text>
-            {wsError && (
-              <Text style={[cameraStyles.statusDisplayFrame, { color: '#ff6b6b' }]}>
-                Error: {wsError}
-              </Text>
-            )}
-            {isStopping.current && (
-              <Text style={[cameraStyles.statusDisplayFrame, { color: '#ffd700' }]}>
-                Stopping... Processing {frameQueue.current.length} remaining frames
-              </Text>
-            )}
-            {capturedFrames.length > 0 && (
-              <View>
-                <Text style={cameraStyles.statusDisplayFrame}>
-                  Latest Frame: {capturedFrames[capturedFrames.length - 1].width}x{capturedFrames[capturedFrames.length - 1].height}
-                </Text>
+        <Camera
+          ref={camera}
+          style={cameraStyles.camera}
+          device={device}
+          isActive={true}
+          video={true}
+          photo={true}
+          audio={false}
+          onError={onError}
+        />
+
+        <View pointerEvents="none" style={cameraStyles.previewOverlay}>
+          <View style={cameraStyles.handGuide}>
+            <View style={[cameraStyles.guideCorner, cameraStyles.guideCornerTopLeft]} />
+            <View style={[cameraStyles.guideCorner, cameraStyles.guideCornerTopRight]} />
+            <View style={[cameraStyles.guideCorner, cameraStyles.guideCornerBottomLeft]} />
+            <View style={[cameraStyles.guideCorner, cameraStyles.guideCornerBottomRight]} />
+            {!isActive && (
+              <View style={cameraStyles.guideHint}>
+                <Text style={cameraStyles.guideHintText}>Place your hands inside the frame</Text>
               </View>
             )}
           </View>
-        )}
+        </View>
+
         <View 
           style={cameraStyles.translationContainer}
           accessible={true}
           accessibilityRole="text"
           accessibilityLabel="Translation result"
         >
+          <View style={cameraStyles.translationHeader}>
+            <View>
+              <Text style={cameraStyles.translationStatus}>{sessionStatus}</Text>
+              <Text style={cameraStyles.translationHint}>{sessionHint}</Text>
+            </View>
+            {(captureStatus || apiError || wsError || isSending) && (
+              <Text
+                style={[
+                  cameraStyles.captureStatusText,
+                  (apiError || wsError) ? cameraStyles.captureStatusError : null,
+                ]}
+              >
+                {apiError || wsError || (isSending ? 'Uploading...' : captureStatus)}
+              </Text>
+            )}
+          </View>
+
           <View 
             style={cameraStyles.translationContent}
             accessible={true}
@@ -522,7 +552,7 @@ export default function CameraComponent() {
                 accessible={true}
                 accessibilityRole="text"
               >
-                Your Translation will appear here...
+                Your translation will appear here
               </Text>
             )}
             {isActive && lastStatus === 'idle' && !translation && (
@@ -556,7 +586,7 @@ export default function CameraComponent() {
           >
             <Image
               source={require('../../images/volume.png')}
-              style={{ width: 20, height: 20, tintColor: isPlaying ? 'white' : '#000000ff' }}
+              style={[cameraStyles.audioButtonIcon, isPlaying ? cameraStyles.audioButtonIconActive : null]}
               resizeMode="contain"
               accessibilityIgnoresInvertColors={true}
             />
@@ -581,38 +611,45 @@ export default function CameraComponent() {
             />
           </TouchableOpacity>
 
-          <TouchableOpacity 
-            style={cameraStyles.tapToStartButton} 
+          <TouchableOpacity
+            style={[
+              cameraStyles.tapToStartButton,
+              isActive ? cameraStyles.tapToStartButtonActive : null,
+              isFinishingSession ? cameraStyles.tapToStartButtonBusy : null,
+            ]}
+            disabled={isFinishingSession}
             onPress={async () => {
               await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
               handleTapToStart();
             }}
             accessible={true}
             accessibilityRole="button"
-            accessibilityLabel={isActive ? "Stop translation" : "Start translation"}
+            accessibilityLabel={actionAccessibilityLabel}
             accessibilityHint={
-              isActive 
-                ? "Stops capturing sign language and processes remaining frames" 
+              isActive
+                ? "Stops capturing sign language and processes remaining frames"
                 : "Starts capturing sign language from camera"
             }
-            accessibilityState={{ 
-              disabled: false,
-              busy: isStopping.current 
+            accessibilityState={{
+              disabled: isFinishingSession,
+              busy: isFinishingSession
             }}
             hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
           >
             <Image
               source={require('../../images/taptostart.png')}
-              style={cameraStyles.tapToStartIcon}
+              style={[
+                cameraStyles.tapToStartIcon,
+                isActive ? cameraStyles.tapToStartIconActive : null,
+              ]}
               resizeMode="contain"
               accessibilityIgnoresInvertColors={true}
             />
             <Text style={cameraStyles.tapToStartText}>
-              {isActive ? 'Tap to Stop' : 'Tap to Start'}
+              {actionLabel}
             </Text>
           </TouchableOpacity>
         </View>
-        </ImageBackground>
       </View>
     </SafeAreaView>
   );

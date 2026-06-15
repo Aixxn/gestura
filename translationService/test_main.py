@@ -1,5 +1,5 @@
 """
-Tests for the Gesture Translation Service (merged segmentation + ML + Groq).
+Tests for the Gesture Translation Service (merged segmentation + ML + FLAN-T5).
 
 Run with: pytest test_main.py -v
 """
@@ -113,26 +113,46 @@ class TestNormalizeFrames:
 # ===================================================================
 
 class TestASLGrammarFixer:
-    @patch('main.Groq')
-    def test_init_with_api_key(self, mock_groq):
-        fixer = svc.ASLGrammarFixer(api_key="test_key")
-        mock_groq.assert_called_once_with(api_key="test_key")
-
-    @patch.dict(os.environ, {'GROQ_API_KEY': 'env_key'})
-    @patch('main.Groq')
-    def test_init_with_env_var(self, mock_groq):
+    def test_init_uses_flan_t5_default(self):
         fixer = svc.ASLGrammarFixer()
-        mock_groq.assert_called_once_with(api_key="env_key")
+        assert fixer.model_name == "google/flan-t5-small"
 
-    @patch('main.Groq')
-    def test_fix_grammar_success(self, mock_groq):
-        mock_client = Mock()
-        mock_response = Mock()
-        mock_response.choices = [Mock()]
-        mock_response.choices[0].message.content = "I am hungry."
-        mock_client.chat.completions.create.return_value = mock_response
-        mock_groq.return_value = mock_client
-        fixer = svc.ASLGrammarFixer(api_key="test_key")
+    def test_init_uses_model_name_from_env(self, monkeypatch):
+        monkeypatch.setenv("FLAN_T5_MODEL", "google/flan-t5-base")
+        fixer = svc.ASLGrammarFixer()
+        assert fixer.model_name == "google/flan-t5-base"
+
+    def test_fix_grammar_success(self, monkeypatch):
+        class FakeInputs(dict):
+            def to(self, _device):
+                return self
+
+        class FakeTokenizer:
+            def __call__(self, prompt, **kwargs):
+                assert "Convert ASL gloss to natural English" in prompt
+                assert "ME HUNGRY" in prompt
+                assert kwargs["return_tensors"] == "pt"
+                return FakeInputs({"input_ids": [1]})
+
+            def decode(self, output_ids, skip_special_tokens=True):
+                assert skip_special_tokens is True
+                assert output_ids == [101]
+                return '"I am hungry."'
+
+        class FakeModel:
+            device = "cpu"
+
+            def generate(self, **kwargs):
+                assert kwargs["input_ids"] == [1]
+                assert kwargs["max_new_tokens"] == 100
+                return [[101]]
+
+        fixer = svc.ASLGrammarFixer()
+        monkeypatch.setattr(
+            fixer,
+            "_load_model",
+            lambda: (FakeTokenizer(), FakeModel()),
+        )
         result = fixer.fix_grammar("ME HUNGRY")
         assert result == "I am hungry."
 

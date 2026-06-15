@@ -51,7 +51,6 @@ import keras
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 from typing import Optional
-from groq import Groq
 from dotenv import load_dotenv
 from converter import Converter, FEATURE_DIM, WINDOW_SIZE
 from motion_detector import MotionDetector
@@ -62,47 +61,72 @@ load_dotenv()
 app = FastAPI(
     debug=True,
     title='Gesture Translation Service',
-    description='Combined sign segmentation + ASL translation + Groq grammar correction',
+    description='Combined sign segmentation + ASL translation + local FLAN-T5 grammar correction',
 )
 
 # ---------------------------------------------------------------------------
-# ASL Grammar Fixer (unchanged)
+# ASL Grammar Fixer
 # ---------------------------------------------------------------------------
 
 class ASLGrammarFixer:
-    def __init__(self, api_key: str = None):
-        self.client = Groq(api_key=api_key or os.getenv("GROQ_API_KEY"))
-        self.model = "llama-3.3-70b-versatile"
-        self.system_prompt = """You are an expert in American Sign Language (ASL) grammar conversion.
-Convert ASL gloss text (space-separated signs) into natural, grammatically correct English.
+    def __init__(self, model_name: str | None = None, max_new_tokens: int = 100):
+        self.model_name = model_name or os.getenv("FLAN_T5_MODEL", "google/flan-t5-small")
+        self.max_new_tokens = max_new_tokens
+        self._tokenizer = None
+        self._model = None
+        self.prompt_template = (
+            "Convert ASL gloss to natural English.\n"
+            "Examples:\n"
+            'ASL: "YESTERDAY ME GO STORE BUY MILK"\n'
+            'English: "Yesterday, I went to the store to buy milk."\n'
+            'ASL: "ME HUNGRY EAT WANT"\n'
+            'English: "I am hungry and want to eat."\n'
+            'ASL: "YOU LIKE COFFEE?"\n'
+            'English: "Do you like coffee?"\n'
+            'ASL: "{asl_gloss}"\n'
+            "English:"
+        )
 
-Rules:
-- ASL uses topic-comment structure
-- No verb conjugations in ASL
-- Directional verbs indicate subject/object
-- Facial expressions add meaning
-- Time is established at start
+    def _load_model(self):
+        if self._tokenizer is None or self._model is None:
+            from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 
-Examples:
-ASL: "YESTERDAY ME GO STORE BUY MILK" → "Yesterday, I went to the store to buy milk."
-ASL: "ME HUNGRY EAT WANT" → "I am hungry and want to eat."
-ASL: "YOU LIKE COFFEE?" → "Do you like coffee?"
-"""
+            self._tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+            self._model = AutoModelForSeq2SeqLM.from_pretrained(self.model_name)
+            self._model.eval()
+        return self._tokenizer, self._model
 
     def fix_grammar(self, asl_gloss: str) -> str:
         try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": self.system_prompt},
-                    {"role": "user", "content": f"Convert to English: {asl_gloss}"}
-                ],
-                temperature=0.3,
-                max_tokens=100
+            cleaned_gloss = " ".join(asl_gloss.split())
+            if not cleaned_gloss:
+                return ""
+
+            tokenizer, model = self._load_model()
+            prompt = self.prompt_template.format(asl_gloss=cleaned_gloss)
+            inputs = tokenizer(
+                prompt,
+                return_tensors="pt",
+                truncation=True,
+                max_length=256,
             )
-            return response.choices[0].message.content.strip()
+
+            if hasattr(inputs, "to"):
+                inputs = inputs.to(model.device)
+
+            output_ids = model.generate(
+                **inputs,
+                max_new_tokens=self.max_new_tokens,
+                num_beams=4,
+                do_sample=False,
+            )
+            translated = tokenizer.decode(output_ids[0], skip_special_tokens=True).strip()
+            translated = translated.strip('"').strip("'").strip()
+            if not translated:
+                raise ValueError("FLAN-T5 returned an empty translation")
+            return translated
         except Exception as e:
-            print(f"LLM Error: {e}")
+            print(f"FLAN-T5 Error: {e}")
             raise e
 
 grammar_fixer = ASLGrammarFixer()

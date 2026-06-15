@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { gesturaAPI } from '../services/api';
 import { generateUUID } from '../utils/helpers';
 
@@ -7,6 +7,7 @@ export const useGesturaAPI = () => {
   const [isSending, setIsSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastStatus, setLastStatus] = useState<string>('');
+  const inFlightUploads = useRef(0);
 
   // Initialize session UUID on mount
   useEffect(() => {
@@ -23,12 +24,8 @@ export const useGesturaAPI = () => {
       return { success: false, error: 'Session not initialized' };
     }
 
-    if (isSending) {
-      console.warn('API: Previous frame still sending, skipping...');
-      return { success: false, error: 'Previous request in progress' };
-    }
-
-    setIsSending(true);
+    inFlightUploads.current += 1;
+    setIsSending(inFlightUploads.current > 0);
     setError(null);
 
     try {
@@ -36,16 +33,17 @@ export const useGesturaAPI = () => {
       const status = response.data?.status || '';
       setLastStatus(status);
       console.log('API: Frame sent successfully:', response.data);
-      setIsSending(false);
       return { success: true, data: response.data };
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to send frame';
-      // console.error('API: Failed to send frame:', errorMessage);
-      // setError(errorMessage);
-      setIsSending(false);
+      console.error('API: Failed to send frame:', errorMessage);
+      setError(errorMessage);
       return { success: false, error: errorMessage };
+    } finally {
+      inFlightUploads.current = Math.max(0, inFlightUploads.current - 1);
+      setIsSending(inFlightUploads.current > 0);
     }
-  }, [sessionUUID, isSending]);
+  }, [sessionUUID]);
 
   // Stop processing for the current session
   const stopProcessing = useCallback(async () => {

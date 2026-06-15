@@ -8,13 +8,28 @@
     "scheme": "gestura",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "checkAutomatically": "ON_LOAD",
+      "fallbackToCacheTimeout": 0,
+      "url": "https://u.expo.dev/0efe0a9d-79c2-4f57-8e9d-3fca64e523d5"
+    },
     "extra": {
       "apiUrl": "http://YOUR_SERVER_IP:8080",
-      "wsUrl": "ws://YOUR_SERVER_IP:9898"
+      "wsUrl": "ws://YOUR_SERVER_IP:9898",
+      "router": {},
+      "eas": {
+        "projectId": "0efe0a9d-79c2-4f57-8e9d-3fca64e523d5"
+      }
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.anonymous.gestura"
+      "bundleIdentifier": "com.anonymous.gestura",
+      "infoPlist": {
+        "NSCameraUsageDescription": "Allow $(PRODUCT_NAME) to access your camera"
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -26,6 +41,9 @@
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
       "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.INTERNET",
         "android.permission.CAMERA",
         "android.permission.RECORD_AUDIO",
         "android.permission.INTERNET"
@@ -56,6 +74,15 @@
           "cameraPermission": "Allow $(PRODUCT_NAME) to access your camera",
           "microphonePermission": "Allow $(PRODUCT_NAME) to access your microphone",
           "recordAudioAndroid": true
+        }
+      ],
+      [
+        "react-native-vision-camera",
+        {
+          "cameraPermissionText": "Allow $(PRODUCT_NAME) to access your camera",
+          "enableMicrophonePermission": false,
+          "enableFrameProcessors": true,
+          "enableCodeScanner": false
         }
       ]
     ],
