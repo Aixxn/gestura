@@ -286,10 +286,10 @@ def run():
             print(f"  Extraction error: {e}")
             continue
 
-        # TODO: Re-add idle gate once tuned (see converter.is_idle / IDLE_THRESHOLD)
-        # if converter.is_idle:
-        #     md.reset()
-        # else:
+        if converter.is_idle:
+            md.reset()
+            continue
+
         sign_ended, completed_sign = md.update(kp)
 
         if sign_ended and completed_sign is not None:

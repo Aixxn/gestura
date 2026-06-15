@@ -243,10 +243,10 @@ async def process_frame(request: FrameRequest):
 
         md = session["motion_detector"]
 
-        # TODO: Re-add idle gate once tuned (see converter.is_idle / IDLE_THRESHOLD)
-        # if converter.is_idle:
-        #     md.reset()
-        #     return FrameResponse(status="processing")
+        if converter.is_idle:
+            md.reset()
+            return FrameResponse(status="processing")
+
 
         sign_ended, completed_sign = md.update(keypoints)
 
