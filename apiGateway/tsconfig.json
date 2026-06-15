@@ -1,23 +1,15 @@
 {
-  // Visit https://aka.ms/tsconfig to read more about this file
   "compilerOptions": {
-    // File Layout
     "rootDir": ".",
     "outDir": "./dist/",
-
-    // Environment Settings
     "module": "NodeNext",
     "target": "ES2022",
     "lib": ["ES2022"],
     "moduleResolution": "NodeNext",
     "types": ["node"],
-
-    // Other Outputs
     "sourceMap": true,
     "declaration": true,
     "declarationMap": true,
-
-    // Options
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": true,
@@ -28,12 +20,11 @@
     "noFallthroughCasesInSwitch": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
-
     "baseUrl": ".",
     "paths": {
-            "@src/*": ["./*"]
-        }
+      "@src/*": ["./*"]
+    }
   },
-  "include": ["app.ts", "bin/**/*.ts", "routes/**/*.ts", "test/**/*.ts"],
-  "exclude": ["node_modules"],
+  "include": ["app.ts", "bin/**/*.ts", "routes/**/*.ts", "middleware/**/*.ts", "types/**/*.ts", "test/**/*.ts"],
+  "exclude": ["node_modules"]
 }

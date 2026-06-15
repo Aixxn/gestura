@@ -70,6 +70,8 @@ npm test            # Run Mocha tests (timeout 5000ms)
 - `bin/www.ts` → Server entry point
 - `app.ts` → Express setup
 - `routes/` → API endpoints
+- `middleware/auth.ts` → JWT authentication middleware
+- `types/index.ts` → Shared TypeScript interfaces
 - `tsconfig.json` → Includes `baseUrl: "."`, paths: `@src/*` → `./`
 
 **Environment** (`.env`):
@@ -77,12 +79,55 @@ npm test            # Run Mocha tests (timeout 5000ms)
 WEB_SOCKET_HOST = "0.0.0.0"
 WEB_SOCKET_PORT = 9898
 TRANSLATION_SERVICE_URL = "http://translationService:7860"
+JWT_SECRET = "your-secret-key-change-in-production"
+JWT_EXPIRES_IN = "7d"
 ```
 
 **Gotchas**:
 - Uses `tsc-alias` for path resolution post-compilation (required for `@src/*` imports)
 - Strict TypeScript (`strict: true`, `noUnusedLocals`, etc.)
 - WebSocket server on separate port 9898 from API (8080)
+
+---
+
+## Authentication (JWT)
+
+**Tech**: bcrypt (password hashing), jsonwebtoken (JWT), MongoDB (user storage)
+
+### Auth Flow
+1. **Register**: `POST /api/auth/register` with `{ email, password, full_name? }` → returns `{ token, user }`
+2. **Login**: `POST /api/auth/login` with `{ email, password }` → returns `{ token, user }`
+3. **Authenticated requests**: Include header `Authorization: Bearer <token>`
+4. **Get profile**: `GET /api/auth/me` (requires token) → returns current user
+5. **Logout**: `POST /api/auth/logout` (stateless no-op on server)
+
+### Protected Routes
+- `POST /api/convert` — requires valid JWT
+- `GET /api/stop/:uuid` — requires valid JWT
+- `GET /api/auth/me` — requires valid JWT
+- WebSocket `ws://...:9898` — requires `token` query param
+
+Public routes:
+- `POST /api/auth/register`
+- `POST /api/auth/login`
+- `POST /api/auth/logout`
+- `GET /health`
+
+### Key Components
+- `middleware/auth.ts` → `requireAuth` middleware that verifies `Authorization: Bearer <token>`
+- `routes/auth.ts` → bcrypt hashing (12 rounds), JWT signing with 7-day expiry, email-based login
+- `types/index.ts` → `IUser`, `JwtPayload`, `AuthRequest` interfaces
+
+### Testing
+- Auth tests require MongoDB running (local or Docker)
+- Segmentation tests mock axios and don't need MongoDB
+- Tests use `makeToken()` helper to generate valid JWTs for protected route tests
+
+### Environment Variables
+```
+JWT_SECRET=your-secret-key           # Required - used to sign/verify tokens
+JWT_EXPIRES_IN=7d                    # Optional - token expiry duration
+```
 
 ---
 
@@ -189,7 +234,7 @@ docker compose down
 cd apiGateway
 npm run dev         # Development (watch mode)
 npm run build       # TypeScript → dist/
-npm test            # Mocha tests
+npm test            # Mocha tests (requires MongoDB running)
 npm start           # Production
 ```
 
@@ -207,8 +252,6 @@ cd translationService
 uvicorn main:app --host 0.0.0.0 --port 7860 --reload
 ```
 
-
-
 ### Model
 ```bash
 cd model
@@ -225,6 +268,7 @@ pytest test_main.py
 WEB_SOCKET_HOST=0.0.0.0
 WEB_SOCKET_PORT=9898
 TRANSLATION_SERVICE_URL=http://translationService:7860
+JWT_SECRET=your-secret-key-change-in-production
 ```
 
 ### Frontend (`.env`)
@@ -254,6 +298,8 @@ WINDOW_SIZE=35
 cd apiGateway
 npm test
 # Mocha looks for test files; uses chai, supertest, sinon
+# Requires MongoDB running for auth tests
+# Segmentation tests use mocked axios and don't need MongoDB
 ```
 
 ### Model
@@ -307,6 +353,13 @@ pytest test_main.py -v
    - Increase `still_frames_required` for slower signing or noisy backgrounds
    - Decrease for faster signing (but risk false positives)
 
+8. **JWT Authentication Issues**
+   - `JWT_SECRET` must be set in environment — default is insecure
+   - Auth tests require MongoDB running (start with `docker compose up -d mongodb`)
+   - Frontend stores token in memory only by default; use `expo-secure-store` for persistence
+   - Token expiry defaults to 7 days; configure via `JWT_EXPIRES_IN` env var
+   - WebSocket connections require `token` query param alongside `uuid`
+
 ---
 
 ## Architecture Notes
@@ -320,6 +373,7 @@ pytest test_main.py -v
 - **State Management**: 
   - API Gateway holds session WebSocket connections only (no sign buffering)
   - Translation Service holds all per-session state (motion detector, accumulated predicted words)
+- **Authentication**: JWT-based, server-side only (API Gateway + MongoDB). Password hashing via bcrypt (12 rounds). All translation endpoints require valid JWT.
 
 ---
 
