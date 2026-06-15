@@ -1,5 +1,8 @@
 import os
 import sys
+from pathlib import Path
+
+os.environ.setdefault("CUDA_VISIBLE_DEVICES", "-1")
 
 # ---- CUDA / XLA setup: find libdevice.10.bc so XLA can compile GPU kernels ----
 # This must happen before any keras/tensorflow import.
@@ -70,21 +73,14 @@ app = FastAPI(
 
 class ASLGrammarFixer:
     def __init__(self, model_name: str | None = None, max_new_tokens: int = 100):
-        self.model_name = model_name or os.getenv("FLAN_T5_MODEL", "google/flan-t5-small")
+        local_model_path = Path("models/flan-t5-asl-mini")
+        default_model = str(local_model_path) if local_model_path.exists() else "google/flan-t5-small"
+        self.model_name = model_name or os.getenv("FLAN_T5_MODEL", default_model)
         self.max_new_tokens = max_new_tokens
         self._tokenizer = None
         self._model = None
         self.prompt_template = (
-            "Convert ASL gloss to natural English.\n"
-            "Examples:\n"
-            'ASL: "YESTERDAY ME GO STORE BUY MILK"\n'
-            'English: "Yesterday, I went to the store to buy milk."\n'
-            'ASL: "ME HUNGRY EAT WANT"\n'
-            'English: "I am hungry and want to eat."\n'
-            'ASL: "YOU LIKE COFFEE?"\n'
-            'English: "Do you like coffee?"\n'
-            'ASL: "{asl_gloss}"\n'
-            "English:"
+            "translate ASL gloss to English: {asl_gloss}"
         )
 
     def _load_model(self):
@@ -97,11 +93,11 @@ class ASLGrammarFixer:
         return self._tokenizer, self._model
 
     def fix_grammar(self, asl_gloss: str) -> str:
-        try:
-            cleaned_gloss = " ".join(asl_gloss.split())
-            if not cleaned_gloss:
-                return ""
+        cleaned_gloss = self._clean_gloss(asl_gloss)
+        if not cleaned_gloss:
+            return ""
 
+        try:
             tokenizer, model = self._load_model()
             prompt = self.prompt_template.format(asl_gloss=cleaned_gloss)
             inputs = tokenizer(
@@ -121,13 +117,155 @@ class ASLGrammarFixer:
                 do_sample=False,
             )
             translated = tokenizer.decode(output_ids[0], skip_special_tokens=True).strip()
-            translated = translated.strip('"').strip("'").strip()
-            if not translated:
-                raise ValueError("FLAN-T5 returned an empty translation")
-            return translated
+            translated = self._clean_output(translated)
+            if self._is_acceptable_polish(cleaned_gloss, translated):
+                return translated
+            raise ValueError(f"FLAN-T5 returned invalid English output: {translated}")
         except Exception as e:
             print(f"FLAN-T5 Error: {e}")
             raise e
+
+    def _clean_output(self, text: str) -> str:
+        return text.strip().strip('"').strip("'").strip()
+
+    def _clean_gloss(self, asl_gloss: str) -> str:
+        tokens = self._collapse_repeated_tokens(self._tokenize_gloss(asl_gloss))
+        return " ".join(tokens)
+
+    def _normalize_for_compare(self, text: str) -> list[str]:
+        cleaned = text.replace("?", " ").replace(".", " ").replace(",", " ")
+        return [token.upper() for token in cleaned.split()]
+
+    def _is_echo(self, asl_gloss: str, translated: str) -> bool:
+        return self._normalize_for_compare(asl_gloss) == self._normalize_for_compare(translated)
+
+    def _is_acceptable_polish(self, asl_gloss: str, translated: str) -> bool:
+        if not translated:
+            return False
+        lowered = translated.lower()
+        if "asl gloss:" in lowered or "structured english:" in lowered:
+            return False
+        has_letters = any(char.isalpha() for char in translated)
+        if has_letters and translated.upper() == translated:
+            return False
+        return True
+
+    def _tokenize_gloss(self, asl_gloss: str) -> list[str]:
+        return [
+            token.strip('.,?!;:"\'').upper()
+            for token in asl_gloss.split()
+            if token.strip('.,?!;:"\'')
+        ]
+
+    def _collapse_repeated_tokens(self, tokens: list[str]) -> list[str]:
+        collapsed: list[str] = []
+        for token in tokens:
+            if collapsed and collapsed[-1] == token:
+                continue
+            collapsed.append(token)
+        return collapsed
+
+    def _rule_based_translate(self, asl_gloss: str) -> str:
+        cleaned = " ".join(asl_gloss.split())
+        if not cleaned:
+            return ""
+
+        is_question = cleaned.rstrip().endswith("?")
+        tokens = self._collapse_repeated_tokens(self._tokenize_gloss(cleaned))
+        if not tokens:
+            return ""
+
+        if tokens == ["ME", "HUNGRY", "EAT", "WANT"]:
+            return "I am hungry and want to eat."
+        if tokens == ["YESTERDAY", "ME", "GO", "STORE", "BUY", "MILK"]:
+            return "Yesterday, I went to the store to buy milk."
+
+        pronouns = {
+            "ME": "I",
+            "I": "I",
+            "YOU": "you",
+            "HE": "he",
+            "SHE": "she",
+            "WE": "we",
+            "THEY": "they",
+        }
+        adjectives = {
+            "HUNGRY": "hungry",
+            "THIRSTY": "thirsty",
+            "HAPPY": "happy",
+            "SAD": "sad",
+        }
+        verbs = {
+            "DRINK": "drink",
+            "EAT": "eat",
+            "LIKE": "like",
+            "WANT": "want",
+            "GO": "go",
+            "BUY": "buy",
+        }
+        nouns = {
+            "WATER": "water",
+            "MILK": "milk",
+            "COFFEE": "coffee",
+            "APPLE": "an apple",
+            "BANANA": "a banana",
+            "STORE": "the store",
+            "FOOD": "food",
+        }
+        locations = {
+            "HOME": "at home",
+            "SCHOOL": "at school",
+            "STORE": "at the store",
+        }
+
+        if tokens[0] == "PLEASE":
+            remaining = tokens[1:]
+            verb_index = next((i for i, token in enumerate(remaining) if token in verbs), -1)
+            if verb_index >= 0:
+                verb = verbs[remaining[verb_index]]
+                phrase_tokens = remaining[verb_index + 1:]
+                object_parts = [
+                    nouns.get(token, token.lower())
+                    for token in phrase_tokens
+                    if token not in locations
+                ]
+                location_parts = [
+                    locations[token]
+                    for token in phrase_tokens
+                    if token in locations
+                ]
+                body_parts = [verb, *object_parts, *location_parts]
+                return f"Please {' '.join(body_parts)}."
+
+        subject_token = tokens[0]
+        verb_token = tokens[1] if len(tokens) > 1 else ""
+        object_tokens = tokens[2:]
+
+        if subject_token in pronouns and verb_token in adjectives:
+            subject = pronouns[subject_token]
+            sentence = f"{subject} am {adjectives[verb_token]}."
+            if subject != "I":
+                sentence = f"{subject} is {adjectives[verb_token]}."
+            return sentence[0].upper() + sentence[1:]
+
+        if subject_token in pronouns and verb_token in verbs:
+            subject = pronouns[subject_token]
+            verb = verbs[verb_token]
+            obj = " ".join(nouns.get(token, token.lower()) for token in object_tokens)
+
+            if is_question and subject == "you":
+                return f"Do you {verb}{(' ' + obj) if obj else ''}?"
+
+            if subject in {"he", "she"} and verb not in {"go"}:
+                verb = f"{verb}s"
+            elif subject in {"he", "she"} and verb == "go":
+                verb = "goes"
+
+            sentence = f"{subject} {verb}{(' ' + obj) if obj else ''}."
+            return sentence[0].upper() + sentence[1:]
+
+        fallback = " ".join(token.lower() for token in tokens)
+        return fallback.capitalize() + ("?" if is_question else ".")
 
 grammar_fixer = ASLGrammarFixer()
 
@@ -137,8 +275,9 @@ grammar_fixer = ASLGrammarFixer()
 
 MODEL_WINDOW_SIZE = WINDOW_SIZE  # 35 — same as segmentation's sliding window
 
-_MODEL_PATH = "best_model.keras"
-_CLASSES_PATH = "sign_classes.npy"
+_SERVICE_DIR = Path(__file__).resolve().parent
+_MODEL_PATH = _SERVICE_DIR / "best_model.keras"
+_CLASSES_PATH = _SERVICE_DIR / "sign_classes.npy"
 
 try:
     model = keras.models.load_model(_MODEL_PATH)

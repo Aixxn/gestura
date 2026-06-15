@@ -134,7 +134,11 @@ export default function CameraComponent() {
       const results = await Promise.allSettled(
         batch.map(async (frame) => {
           try {
-            await sendFrame(frame.path);
+            const result = await sendFrame(frame.path);
+            if (!result.success) {
+              console.error(`✗ Failed to send frame ${frame.id}:`, result.error);
+              return { success: false, frameId: frame.id, error: result.error };
+            }
             console.log(`✓ Frame ${frame.id} sent successfully`);
             return { success: true, frameId: frame.id };
           } catch (error) {

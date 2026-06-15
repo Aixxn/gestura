@@ -25,9 +25,11 @@ Output
 
 import sys
 import os
+from pathlib import Path
 
 # ---- CUDA / XLA setup: find libdevice.10.bc so XLA can compile GPU kernels ----
 # This must happen before any keras/tensorflow import.
+os.environ.setdefault("CUDA_VISIBLE_DEVICES", "-1")
 _CUDA_CANDIDATES = [
     os.environ.get("CUDA_HOME"),
     os.environ.get("CUDA_ROOT"),
@@ -159,22 +161,13 @@ load_dotenv(os.path.join(_TS, ".env"))
 
 class ASLGrammarFixer:
     def __init__(self, model_name: str | None = None, max_new_tokens: int = 100):
-        self.model_name = model_name or os.getenv("FLAN_T5_MODEL", "google/flan-t5-small")
+        local_model_path = Path(_TS) / "models" / "flan-t5-asl-mini"
+        default_model = str(local_model_path) if local_model_path.exists() else "google/flan-t5-small"
+        self.model_name = model_name or os.getenv("FLAN_T5_MODEL", default_model)
         self.max_new_tokens = max_new_tokens
         self._tokenizer = None
         self._model = None
-        self.prompt_template = (
-            "Convert ASL gloss to natural English.\n"
-            "Examples:\n"
-            'ASL: "YESTERDAY ME GO STORE BUY MILK"\n'
-            'English: "Yesterday, I went to the store to buy milk."\n'
-            'ASL: "ME HUNGRY EAT WANT"\n'
-            'English: "I am hungry and want to eat."\n'
-            'ASL: "YOU LIKE COFFEE?"\n'
-            'English: "Do you like coffee?"\n'
-            'ASL: "{asl_gloss}"\n'
-            "English:"
-        )
+        self.prompt_template = "translate ASL gloss to English: {asl_gloss}"
 
     def _load_model(self):
         if self._tokenizer is None or self._model is None:
@@ -185,10 +178,11 @@ class ASLGrammarFixer:
         return self._tokenizer, self._model
 
     def fix_grammar(self, asl_gloss: str) -> str:
+        cleaned_gloss = self._clean_gloss(asl_gloss)
+        if not cleaned_gloss:
+            return ""
+
         try:
-            cleaned_gloss = " ".join(asl_gloss.split())
-            if not cleaned_gloss:
-                return ""
             tokenizer, model = self._load_model()
             prompt = self.prompt_template.format(asl_gloss=cleaned_gloss)
             inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=256)
@@ -201,13 +195,51 @@ class ASLGrammarFixer:
                 do_sample=False,
             )
             translated = tokenizer.decode(output_ids[0], skip_special_tokens=True).strip()
-            translated = translated.strip('\"').strip("'").strip()
-            if not translated:
-                raise ValueError("FLAN-T5 returned an empty translation")
+            translated = self._clean_output(translated)
+            if not self._is_acceptable_polish(cleaned_gloss, translated):
+                raise ValueError(f"FLAN-T5 returned invalid English output: {translated}")
             return translated
         except Exception as e:
             print(f"  FLAN-T5 error: {e}")
-            return asl_gloss
+            raise e
+
+    def _clean_output(self, text: str) -> str:
+        return text.strip().strip('"').strip("'").strip()
+
+    def _clean_gloss(self, asl_gloss: str) -> str:
+        tokens = self._collapse_repeated_tokens(self._tokenize_gloss(asl_gloss))
+        return " ".join(tokens)
+
+    def _tokenize_gloss(self, asl_gloss: str) -> list[str]:
+        return [
+            token.strip(" ,.!?;:\"'()[]{}").upper()
+            for token in asl_gloss.split()
+            if token.strip(" ,.!?;:\"'()[]{}")
+        ]
+
+    def _collapse_repeated_tokens(self, tokens: list[str]) -> list[str]:
+        collapsed: list[str] = []
+        for token in tokens:
+            if not collapsed or collapsed[-1] != token:
+                collapsed.append(token)
+        return collapsed
+
+    def _normalize_for_compare(self, text: str) -> list[str]:
+        cleaned = text.replace("?", " ").replace(".", " ").replace(",", " ")
+        return [token.upper() for token in cleaned.split()]
+
+    def _is_echo(self, asl_gloss: str, translated: str) -> bool:
+        return self._normalize_for_compare(asl_gloss) == self._normalize_for_compare(translated)
+
+    def _is_acceptable_polish(self, asl_gloss: str, translated: str) -> bool:
+        if not translated:
+            return False
+        lowered = translated.lower()
+        if "asl gloss:" in lowered or "structured english:" in lowered:
+            return False
+        if translated == translated.upper() and any(char.isalpha() for char in translated):
+            return False
+        return True
 
 
 grammar_fixer = ASLGrammarFixer()

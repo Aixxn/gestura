@@ -115,7 +115,7 @@ class TestNormalizeFrames:
 class TestASLGrammarFixer:
     def test_init_uses_flan_t5_default(self):
         fixer = svc.ASLGrammarFixer()
-        assert fixer.model_name == "google/flan-t5-small"
+        assert fixer.model_name in {"google/flan-t5-small", "models/flan-t5-asl-mini"}
 
     def test_init_uses_model_name_from_env(self, monkeypatch):
         monkeypatch.setenv("FLAN_T5_MODEL", "google/flan-t5-base")
@@ -129,7 +129,7 @@ class TestASLGrammarFixer:
 
         class FakeTokenizer:
             def __call__(self, prompt, **kwargs):
-                assert "Convert ASL gloss to natural English" in prompt
+                assert "translate ASL gloss to English:" in prompt
                 assert "ME HUNGRY" in prompt
                 assert kwargs["return_tensors"] == "pt"
                 return FakeInputs({"input_ids": [1]})
@@ -155,6 +155,148 @@ class TestASLGrammarFixer:
         )
         result = fixer.fix_grammar("ME HUNGRY")
         assert result == "I am hungry."
+
+    def test_fix_grammar_rejects_echoed_simple_sentence(self, monkeypatch):
+        class FakeInputs(dict):
+            def to(self, _device):
+                return self
+
+        class FakeTokenizer:
+            def __call__(self, *_args, **_kwargs):
+                return FakeInputs({"input_ids": [1]})
+
+            def decode(self, *_args, **_kwargs):
+                return "I DRINK WATER"
+
+        class FakeModel:
+            device = "cpu"
+
+            def generate(self, **_kwargs):
+                return [[101]]
+
+        fixer = svc.ASLGrammarFixer()
+        monkeypatch.setattr(
+            fixer,
+            "_load_model",
+            lambda: (FakeTokenizer(), FakeModel()),
+        )
+
+        with pytest.raises(ValueError, match="invalid English output"):
+            fixer.fix_grammar("I DRINK WATER")
+
+    def test_fix_grammar_accepts_model_structured_sentence(self, monkeypatch):
+        class FakeInputs(dict):
+            def to(self, _device):
+                return self
+
+        class FakeTokenizer:
+            def __call__(self, *_args, **_kwargs):
+                return FakeInputs({"input_ids": [1]})
+
+            def decode(self, *_args, **_kwargs):
+                return "I eat an apple."
+
+        class FakeModel:
+            device = "cpu"
+
+            def generate(self, **_kwargs):
+                return [[101]]
+
+        fixer = svc.ASLGrammarFixer()
+        monkeypatch.setattr(
+            fixer,
+            "_load_model",
+            lambda: (FakeTokenizer(), FakeModel()),
+        )
+
+        assert fixer.fix_grammar("I EAT APPLE") == "I eat an apple."
+
+    def test_fix_grammar_cleans_repeated_gloss_before_model(self, monkeypatch):
+        class FakeInputs(dict):
+            def to(self, _device):
+                return self
+
+        class FakeTokenizer:
+            def __call__(self, prompt, **_kwargs):
+                assert "PLEASE DRINK HOME MILK" in prompt
+                assert "PLEASE PLEASE" not in prompt
+                assert "MILK MILK" not in prompt
+                return FakeInputs({"input_ids": [1]})
+
+            def decode(self, *_args, **_kwargs):
+                return "Please drink milk at home."
+
+        class FakeModel:
+            device = "cpu"
+
+            def generate(self, **_kwargs):
+                return [[101]]
+
+        fixer = svc.ASLGrammarFixer()
+        monkeypatch.setattr(
+            fixer,
+            "_load_model",
+            lambda: (FakeTokenizer(), FakeModel()),
+        )
+
+        result = fixer.fix_grammar("PLEASE PLEASE DRINK HOME MILK MILK")
+        assert result == "Please drink milk at home."
+
+    def test_fix_grammar_rejects_gloss_like_model_output(self, monkeypatch):
+        class FakeInputs(dict):
+            def to(self, _device):
+                return self
+
+        class FakeTokenizer:
+            def __call__(self, *_args, **_kwargs):
+                return FakeInputs({"input_ids": [1]})
+
+            def decode(self, *_args, **_kwargs):
+                return "PLEASE DRINK HOME MILK"
+
+        class FakeModel:
+            device = "cpu"
+
+            def generate(self, **_kwargs):
+                return [[101]]
+
+        fixer = svc.ASLGrammarFixer()
+        monkeypatch.setattr(
+            fixer,
+            "_load_model",
+            lambda: (FakeTokenizer(), FakeModel()),
+        )
+
+        with pytest.raises(ValueError, match="invalid English output"):
+            fixer.fix_grammar("PLEASE PLEASE DRINK HOME MILK MILK")
+
+    def test_fix_grammar_rejects_prompt_artifact(self, monkeypatch):
+        class FakeInputs(dict):
+            def to(self, _device):
+                return self
+
+        class FakeTokenizer:
+            def __call__(self, *_args, **_kwargs):
+                return FakeInputs({"input_ids": [1]})
+
+            def decode(self, *_args, **_kwargs):
+                return "ASL gloss: I DRINK WATER Structured English: I drink water."
+
+        class FakeModel:
+            device = "cpu"
+
+            def generate(self, **_kwargs):
+                return [[101]]
+
+        fixer = svc.ASLGrammarFixer()
+        monkeypatch.setattr(
+            fixer,
+            "_load_model",
+            lambda: (FakeTokenizer(), FakeModel()),
+        )
+
+        with pytest.raises(ValueError, match="invalid English output"):
+            fixer.fix_grammar("I DRINK WATER")
 
 
 # ===================================================================

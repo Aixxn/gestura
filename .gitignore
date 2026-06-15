@@ -16,6 +16,7 @@
 **/.env
 **/.ipynb_checkpoints/
 **/*.keras
+translationService/models/
 **/keypoint_data_*/
 
 
@@ -25,4 +26,3 @@
 
 # mediapipe model files (downloaded at runtime)
 **/*.task
-
