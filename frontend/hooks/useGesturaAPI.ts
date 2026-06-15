@@ -6,6 +6,7 @@ export const useGesturaAPI = () => {
   const [sessionUUID, setSessionUUID] = useState<string>('');
   const [isSending, setIsSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [lastStatus, setLastStatus] = useState<string>('');
 
   // Initialize session UUID on mount
   useEffect(() => {
@@ -32,6 +33,8 @@ export const useGesturaAPI = () => {
 
     try {
       const response = await gesturaAPI.convertImage(sessionUUID, imageData);
+      const status = response.data?.status || '';
+      setLastStatus(status);
       console.log('API: Frame sent successfully:', response.data);
       setIsSending(false);
       return { success: true, data: response.data };
@@ -75,12 +78,19 @@ export const useGesturaAPI = () => {
     }
   }, []);
 
+  const clearSession = useCallback(() => {
+    setError(null);
+    setLastStatus('');
+  }, []);
+
   return {
     sessionUUID,
     isSending,
     error,
+    lastStatus,
     sendFrame,
     stopProcessing,
     checkHealth,
+    clearSession,
   };
 };

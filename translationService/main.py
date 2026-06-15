@@ -245,7 +245,7 @@ async def process_frame(request: FrameRequest):
 
         if converter.is_idle:
             md.reset()
-            return FrameResponse(status="processing")
+            return FrameResponse(status="idle")
 
 
         sign_ended, completed_sign = md.update(keypoints)

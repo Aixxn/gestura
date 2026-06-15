@@ -38,6 +38,7 @@ export default function CameraComponent() {
   const frameQueue = useRef<QueuedFrame[]>([]);
   const isProcessingQueue = useRef(false);
   const isStopping = useRef(false);
+  const [isTranslating, setIsTranslating] = useState(false);
   const MAX_QUEUE_SIZE = 80;
   const CONCURRENT_UPLOADS = 5; // Process 5 frames in parallel for better throughput
 
@@ -47,6 +48,8 @@ export default function CameraComponent() {
     sendFrame,
     stopProcessing,
     isSending,
+    lastStatus,
+    clearSession,
   } = useGesturaAPI();
 
   // WebSocket integration (for receiving translations)
@@ -337,6 +340,7 @@ export default function CameraComponent() {
       frameCount.current = 0;
       frameQueue.current = []; // Clear any existing queue
       clearTranslation();
+      clearSession();
       
       console.log(`WebSocket will connect with UUID: ${sessionUUID}`);
       console.log('Started capturing and sending frames...');
@@ -344,17 +348,18 @@ export default function CameraComponent() {
       // Stopping detection - process remaining frames in queue
       console.log(`Stopping capture. Processing ${frameQueue.current.length} remaining frames in queue...`);
       isStopping.current = true;
+      setIsTranslating(true);
       
       // Wait for queue to be fully processed
-      const checkQueueEmpty = setInterval(() => {
+      const checkQueueEmpty = setInterval(async () => {
         if (frameQueue.current.length === 0 && !isProcessingQueue.current) {
           clearInterval(checkQueueEmpty);
           console.log(`All frames processed. Total frames captured: ${frameCount.current}`);
           
           // Now stop the backend processing
-          stopProcessing().then(() => {
-            console.log('Backend processing stopped');
-          });
+          const result = await stopProcessing();
+          setIsTranslating(false);
+          console.log('Backend processing stopped', result);
         } else {
           console.log(`Waiting for queue to empty... ${frameQueue.current.length} frames remaining`);
         }
@@ -503,6 +508,14 @@ export default function CameraComponent() {
               >
                 {translation}
               </Text>
+            ) : isTranslating ? (
+              <Text 
+                style={cameraStyles.placeholderText}
+                accessible={true}
+                accessibilityRole="text"
+              >
+                Translating...
+              </Text>
             ) : (
               <Text 
                 style={cameraStyles.placeholderText}
@@ -510,6 +523,20 @@ export default function CameraComponent() {
                 accessibilityRole="text"
               >
                 Your Translation will appear here...
+              </Text>
+            )}
+            {isActive && lastStatus === 'idle' && !translation && (
+              <Text 
+                style={{
+                  color: '#ffd700',
+                  fontSize: 12,
+                  textAlign: 'center',
+                  marginTop: 8,
+                }}
+                accessible={true}
+                accessibilityRole="text"
+              >
+                No hands detected
               </Text>
             )}
           </View>
