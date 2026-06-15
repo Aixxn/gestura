@@ -95,7 +95,7 @@ _TS = os.path.join(_PROJECT, "translationService")
 if _TS not in sys.path:
     sys.path.insert(0, _TS)
 
-from converter import Converter, WINDOW_SIZE, FEATURE_DIM
+from converter import Converter, WINDOW_SIZE, FEATURE_DIM, ExponentialMovingAverage
 from motion_detector import MotionDetector
 from normalize import normalize_frames
 
@@ -267,18 +267,23 @@ def run():
         stillness_floor=_MD_STILLNESS_FLOOR,
     )
 
+    smoother = ExponentialMovingAverage(alpha=0.4)
+
     cap = _open_webcam()
     if cap is None:
         print("ERROR: No webcam found.")
         sys.exit(1)
 
     cv.namedWindow("Gestura — Pipeline Test", cv.WINDOW_NORMAL)
-    cv.resizeWindow("Gestura — Pipeline Test", 960, 480)
+    cv.resizeWindow("Gestura — Pipeline Test", 1000, 480)
 
     words: list[str] = []
     last_word = ""
     last_conf = 0.0
     word_ttl = 0
+    sign_records: list[dict] = []
+    background_count = 0
+    _session_start = time.time()
     prev_time = time.time()
 
     # Final model status check
@@ -291,11 +296,12 @@ def run():
     print("\n" + "=" * 60)
     print("  Gestura Pipeline Tester  [DIAGNOSTIC MODE]")
     print("  Sign in front of the webcam.")
-    print("  Controls:  Q = stop & translate     C = clear")
+    print("  Controls:  Q = stop & translate     C = clear     P = perf")
     print("  D = toggle debug overlay (default ON)")
     print("=" * 60 + "\n")
 
     show_debug = True
+    show_perf = False
     frame_count = 0
     debug_terminal_interval = 30  # print debug to terminal every N frames
 
@@ -313,16 +319,29 @@ def run():
         except Exception as e:
             print(f"  Extraction error: {e}")
             continue
+        smoothed_kp = smoother.update(kp)
 
         if not converter.is_idle:
-            sign_ended, completed_sign = md.update(kp)
+            sign_ended, completed_sign = md.update(kp, store_kp=smoothed_kp)
 
             if sign_ended and completed_sign is not None:
                 kp_list = [k.tolist() for k in completed_sign]
                 word, conf = predict_word(kp_list)
+                dur = len(completed_sign) / 30.0
+                raw_m = list(md.raw_motion_history)[-1] if md.raw_motion_history else 0.0
+                sm_m = md.smoothed_motion
+
+                # Record metrics for performance summary
+                # (record before BACKGROUND check so we track all boundaries)
+                rec = dict(word=word, conf=conf, frames=len(completed_sign),
+                           dur=dur, raw_motion=raw_m, smoothed_motion=sm_m)
+                sign_records.append(rec)
 
                 # Skip BACKGROUND predictions — they are not real signs
                 if word == "BACKGROUND":
+                    background_count += 1
+                    print(f"  ━━ BG #{background_count} ━━  "
+                          f"frames={len(completed_sign)}  dur={dur:.2f}s  motion={sm_m:.4f}")
                     continue
 
                 words.append(word)
@@ -331,8 +350,11 @@ def run():
                 word_ttl = 60
 
                 model_status = "MODEL_LOADED" if model is not None else "MODEL_NONE"
-                print(f"  -> Sign #{len(words)-1}: {word}  ({conf:.0%})  [{model_status}]")
-                print(f"     Gloss so far: {' '.join(words)}")
+                print(f"  ━━ SIGN #{len(words)} ━━  "
+                      f'word="{word}"  conf={conf:.0%}  '
+                      f"frames={len(completed_sign)}  dur={dur:.2f}s  "
+                      f"motion={sm_m:.4f}  [{model_status}]")
+                print(f"     Gloss: {' '.join(words)}")
         converter.draw_landmarks(frame)
 
         # ---- HUD overlay ----
@@ -444,6 +466,32 @@ def run():
     # ---- Cleanup ----
     cap.release()
     cv.destroyAllWindows()
+
+    # ---- Segmentation performance summary ----
+    if sign_records or background_count > 0:
+        elapsed = time.time() - _session_start
+        total_valid = sum(1 for r in sign_records if r["word"] != "BACKGROUND")
+        total_all = len(sign_records)
+        print("\n" + "=" * 60)
+        print("  SEGMENTATION PERFORMANCE")
+        print("=" * 60)
+        print(f"  Valid signs:       {total_valid}")
+        print(f"  Skipped (BG):      {background_count}")
+        print(f"  Total boundaries:  {total_all}")
+        if total_valid > 0:
+            valid = [r for r in sign_records if r["word"] != "BACKGROUND"]
+            durs = [r["dur"] for r in valid]
+            confs = [r["conf"] for r in valid]
+            motions = [r["smoothed_motion"] for r in valid]
+            print(f"  Duration:          avg={sum(durs)/len(durs):.2f}s  "
+                  f"min={min(durs):.2f}s  max={max(durs):.2f}s")
+            print(f"  Confidence:        avg={sum(confs)/len(confs):.0%}  "
+                  f"min={min(confs):.0%}  max={max(confs):.0%}")
+            print(f"  Motion@boundary:   avg={sum(motions)/len(motions):.4f}")
+            spm = total_valid / max(elapsed / 60.0, 0.001)
+            print(f"  Signs/minute:      {spm:.1f}")
+            print(f"  Session duration:  {elapsed:.1f}s")
+        print("=" * 60 + "\n")
 
     # ---- Grammar correction ----
     asl_gloss = " ".join(words)

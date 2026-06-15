@@ -32,6 +32,33 @@ _MODEL_URL = (
 _MODEL_PATH = os.path.join(_MODEL_DIR, "holistic_landmarker.task")
 
 
+class ExponentialMovingAverage:
+    """Smooths out webcam micro-jitter to prevent static signs from looking like motion.
+
+    Applied AFTER bounded persistence and nose-normalisation, the EMA blends
+    each new keypoint frame with previous ones, killing high-frequency noise
+    while preserving the overall gesture trajectory.
+
+    ``alpha=1.0`` = no smoothing (pass-through).
+    ``alpha=0.4`` = moderate (default).
+    ``alpha=0.1`` = heavy smoothing.
+    """
+
+    def __init__(self, alpha: float = 0.4):
+        self.alpha = alpha
+        self.state: np.ndarray | None = None
+
+    def reset(self):
+        self.state = None
+
+    def update(self, current_val: np.ndarray) -> np.ndarray:
+        if self.state is None:
+            self.state = current_val.copy()
+            return current_val.copy()
+        self.state = self.alpha * current_val + (1.0 - self.alpha) * self.state
+        return self.state
+
+
 def _ensure_model() -> str:
     """Download the holistic landmarker model if not present."""
     if os.path.exists(_MODEL_PATH):
