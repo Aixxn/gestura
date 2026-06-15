@@ -1,7 +1,7 @@
 import axios from 'axios';
 import { API_BASE_URL, WS_BASE_URL } from '../config/environment';
+import { getToken } from './token';
 
-// TypeScript interfaces for API responses
 export interface ConvertImageResponse {
   success: boolean;
   message?: string;
@@ -18,22 +18,24 @@ export interface HealthCheckResponse {
   timestamp: number;
 }
 
-// API Configuration - now using centralized environment config
 const apiClient = axios.create({
   baseURL: API_BASE_URL,
-  timeout: 30000, // 30 seconds
+  timeout: 30000,
   headers: {
     'Content-Type': 'application/json',
   },
 });
 
-// Request interceptor for logging
+// Request interceptor: attach auth token
 apiClient.interceptors.request.use(
   (config) => {
     console.log(`API Request: ${config.method?.toUpperCase()} ${config.baseURL}${config.url}`);
-    if (config.headers) {
-      console.log('Request Headers:', JSON.stringify(config.headers, null, 2));
+
+    const token = getToken();
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`;
     }
+
     return config;
   },
   (error) => {
@@ -42,33 +44,27 @@ apiClient.interceptors.request.use(
   }
 );
 
-// Response interceptor for logging
+// Response interceptor: handle 401 globally
 apiClient.interceptors.response.use(
   (response) => {
     console.log(`API Response: ${response.config.url} - ${response.status}`);
     return response;
   },
   (error) => {
+    if (error.response?.status === 401) {
+      console.warn('API: Unauthorized - token may be expired');
+    }
     console.error('API Response Error:', error.response?.status, error.message);
     return Promise.reject(error);
   }
 );
 
-// API Service Methods
 export const gesturaAPI = {
-  /**
-   * Convert image to sign language translation
-   * @param uuid - Unique session identifier
-   * @param imageFile - Image file path or blob
-   * @returns Promise with response
-   */
   convertImage: async (uuid: string, imageFile: Blob | File | string) => {
     const formData = new FormData();
     formData.append('uuid', uuid);
-    
-    // Handle different input types
+
     if (typeof imageFile === 'string') {
-      // If it's a file path, create proper file object for React Native
       const uri = imageFile.startsWith('file://') ? imageFile : `file://${imageFile}`;
       formData.append('rawImage', {
         uri: uri,
@@ -76,7 +72,6 @@ export const gesturaAPI = {
         name: 'frame.jpg',
       } as any);
     } else {
-      // If it's a Blob or File
       formData.append('rawImage', {
         uri: imageFile,
         type: 'image/jpeg',
@@ -84,12 +79,17 @@ export const gesturaAPI = {
       } as any);
     }
 
-    // Use fetch instead of axios for better React Native FormData support
-    // Don't set Content-Type header - let fetch set it with boundary
     try {
+      const token = getToken();
+      const headers: Record<string, string> = {};
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+
       const response = await fetch(`${API_BASE_URL}/api/convert`, {
         method: 'POST',
         body: formData,
+        headers,
       });
 
       if (!response.ok) {
@@ -107,27 +107,23 @@ export const gesturaAPI = {
     }
   },
 
-  /**
-   * Stop processing for a session
-   * @param uuid - Unique session identifier
-   * @returns Promise with response
-   */
   stopProcessing: async (uuid: string) => {
     return apiClient.get(`/api/stop/${uuid}`);
   },
 
-  /**
-   * Health check
-   * @returns Promise with response
-   */
   healthCheck: async () => {
     return apiClient.get('/health');
   },
 };
 
-// WebSocket connection helper - now using centralized environment config
-export const createWebSocketConnection = (uuid: string): WebSocket => {
-  const WS_URL = `${WS_BASE_URL}?uuid=${uuid}`;
+export const createWebSocketConnection = (uuid: string): WebSocket | null => {
+  const token = getToken();
+  if (!token) {
+    console.error('WebSocket: No auth token available');
+    return null;
+  }
+
+  const WS_URL = `${WS_BASE_URL}?uuid=${uuid}&token=${encodeURIComponent(token)}`;
   console.log(`Connecting to WebSocket: ${WS_URL}`);
   return new WebSocket(WS_URL);
 };
