@@ -87,34 +87,31 @@ describe('Auth Routes - /api/auth', () => {
       expect(res.body).to.have.property('message', 'User already exists');
     });
 
-    // NOTE: Current implementation doesn't validate required fields - it accepts partial data
-    // These tests document the current behavior; validation should be added to the implementation
-    it('should accept registration with only username (current behavior)', async () => {
+    it('should return 400 for registration with only username', async () => {
       const res = await request
         .post('/api/auth/register')
         .send({ username: 'testuser' }) // missing email and password
-        .expect(200);
+        .expect(400);
 
-      expect(res.body).to.have.property('message', 'Registration successful');
-      expect(res.body).to.have.property('username', 'testuser');
+      expect(res.body).to.have.property('message', 'Username, email, and password are required');
     });
 
-    it('should accept registration with username and password only (current behavior)', async () => {
+    it('should return 400 for registration with username and password only', async () => {
       const res = await request
         .post('/api/auth/register')
         .send({ username: 'testuser', password: 'password123' })
-        .expect(200);
+        .expect(400);
 
-      expect(res.body).to.have.property('message', 'Registration successful');
+      expect(res.body).to.have.property('message', 'Username, email, and password are required');
     });
 
-    it('should accept registration with username and email only (current behavior)', async () => {
+    it('should return 400 for registration with username and email only', async () => {
       const res = await request
         .post('/api/auth/register')
         .send({ username: 'testuser', email: 'test@example.com' })
-        .expect(200);
+        .expect(400);
 
-      expect(res.body).to.have.property('message', 'Registration successful');
+      expect(res.body).to.have.property('message', 'Username, email, and password are required');
     });
 
     it('should store multiple users independently', async () => {
@@ -166,36 +163,31 @@ describe('Auth Routes - /api/auth', () => {
       expect(res.body).to.have.property('message', 'Invalid credentials');
     });
 
-    // NOTE: Current implementation doesn't verify password - only checks if username exists
-    // This test documents the current behavior; password verification should be added
-    it('should login successfully even with wrong password (current behavior)', async () => {
+    it('should return 401 for wrong password', async () => {
       const res = await request
         .post('/api/auth/login')
         .send({ username: 'logintest', password: 'wrongpassword' })
-        .expect(200); // Current behavior: doesn't check password
-
-      expect(res.body).to.have.property('message', 'Login successful');
-      expect(res.body).to.have.property('username', 'logintest');
-    });
-
-    it('should return 401 when username is missing', async () => {
-      const res = await request
-        .post('/api/auth/login')
-        .send({ password: 'password123' })
-        .expect(401); // findOne with undefined username returns null
+        .expect(401);
 
       expect(res.body).to.have.property('message', 'Invalid credentials');
     });
 
-    // NOTE: Current implementation doesn't verify password is provided
-    it('should login successfully even when password is missing (current behavior)', async () => {
+    it('should return 400 when username is missing', async () => {
+      const res = await request
+        .post('/api/auth/login')
+        .send({ password: 'password123' })
+        .expect(400);
+
+      expect(res.body).to.have.property('message', 'Username and password are required');
+    });
+
+    it('should return 400 when password is missing', async () => {
       const res = await request
         .post('/api/auth/login')
         .send({ username: 'logintest' })
-        .expect(200); // Current behavior: doesn't check password
+        .expect(400);
 
-      expect(res.body).to.have.property('message', 'Login successful');
-      expect(res.body).to.have.property('username', 'logintest');
+      expect(res.body).to.have.property('message', 'Username and password are required');
     });
 
     it('should not modify database on login attempt', async () => {
@@ -275,9 +267,9 @@ describe('Auth Routes - /api/auth', () => {
       const res = await request
         .post('/api/auth/register')
         .send({})
-        .expect(500);
+        .expect(400);
 
-      expect(res.body).to.have.property('message', 'Registration error');
+      expect(res.body).to.have.property('message', 'Username, email, and password are required');
     });
   });
 });

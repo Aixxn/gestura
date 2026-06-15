@@ -1,13 +1,6 @@
-import {
-  addDoc,
-  collection,
-  getDocs,
-  limit,
-  query,
-  where,
-} from "firebase/firestore";
+import axios from "axios";
 
-import { db } from "./firebase";
+import apiClient from "./api";
 
 export interface RegisterInput {
   email: string;
@@ -29,23 +22,22 @@ export async function registerUser(input: RegisterInput) {
     throw new Error('Please fill in all required fields.');
   }
 
-  const usersRef = collection(db, "users");
-  const existingQuery = query(usersRef, where("email", "==", email), limit(1));
-  const existingSnapshot = await getDocs(existingQuery);
-  if (!existingSnapshot.empty) {
-    throw new Error("Email already registered.");
+  try {
+    const response = await apiClient.post("/api/auth/register", {
+      username: email,
+      email,
+      full_name,
+      password,
+    });
+
+    return response.data;
+  } catch (error) {
+    if (axios.isAxiosError(error) && error.response?.status === 400) {
+      throw new Error("Email already registered.");
+    }
+
+    throw new Error("Registration failed. Check your connection and try again.");
   }
-
-  const newUser = {
-    email,
-    full_name,
-    password,
-    created_at: new Date(),
-  };
-
-  const docRef = await addDoc(usersRef, newUser);
-
-  return { _id: docRef.id, email, full_name };
 }
 
 export async function loginUser(input: LoginInput) {
@@ -56,19 +48,18 @@ export async function loginUser(input: LoginInput) {
     throw new Error('Please enter your email and password.');
   }
 
-  const usersRef = collection(db, "users");
-  const loginQuery = query(
-    usersRef,
-    where("email", "==", email),
-    where("password", "==", password),
-    limit(1),
-  );
-  const snapshot = await getDocs(loginQuery);
-  if (snapshot.empty) {
-    throw new Error("Invalid email or password.");
-  }
+  try {
+    const response = await apiClient.post("/api/auth/login", {
+      username: email,
+      password,
+    });
 
-  const doc = snapshot.docs[0];
-  const user = doc?.data();
-  return { _id: doc?.id, ...user };
+    return response.data;
+  } catch (error) {
+    if (axios.isAxiosError(error) && error.response?.status === 401) {
+      throw new Error("Invalid email or password.");
+    }
+
+    throw new Error("Login failed. Check your connection and try again.");
+  }
 }

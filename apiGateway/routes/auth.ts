@@ -24,8 +24,13 @@ connectMongoDB();
 
 authRouter.post('/login', async (req, res) => {
     try {
-        const { username } = req.body;
-        const user = await db.collection(USERS_COLLECTION).findOne({ username });
+        const { username, password } = req.body;
+
+        if (!username || !password) {
+            return res.status(400).send({ message: 'Username and password are required' });
+        }
+
+        const user = await db.collection(USERS_COLLECTION).findOne({ username, password });
         
         if (!user) {
             return res.status(401).send({ message: 'Invalid credentials' });
@@ -39,14 +44,19 @@ authRouter.post('/login', async (req, res) => {
 
 authRouter.post('/register', async (req, res) => {
     try {
-        const { username, email, password } = req.body;
+        const { username, email, full_name, password } = req.body;
+
+        if (!username || !email || !password) {
+            return res.status(400).send({ message: 'Username, email, and password are required' });
+        }
+
         const existingUser = await db.collection(USERS_COLLECTION).findOne({ username });
         
         if (existingUser) {
             return res.status(400).send({ message: 'User already exists' });
         }
         
-        await db.collection(USERS_COLLECTION).insertOne({ username, email, password });
+        await db.collection(USERS_COLLECTION).insertOne({ username, email, full_name, password });
         return res.send({ message: 'Registration successful', username, email });
     } catch (error) {
         return res.status(500).send({ message: 'Registration error', error });
