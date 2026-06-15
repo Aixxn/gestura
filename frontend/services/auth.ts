@@ -1,13 +1,7 @@
-import {
-  addDoc,
-  collection,
-  getDocs,
-  limit,
-  query,
-  where,
-} from "firebase/firestore";
+import axios from 'axios';
 
-import { db } from "./firebase";
+import apiClient from './api';
+import { setToken, clearToken } from './token';
 
 export interface RegisterInput {
   email: string;
@@ -20,6 +14,28 @@ export interface LoginInput {
   password: string;
 }
 
+export interface AuthResponse {
+  success: boolean;
+  message: string;
+  token?: string;
+  user?: {
+    _id?: string;
+    email: string;
+    full_name?: string;
+  };
+}
+
+function getAuthError(error: unknown, fallback: string): Error {
+  if (axios.isAxiosError(error)) {
+    const message = error.response?.data?.message;
+    if (typeof message === 'string' && message.length > 0) {
+      return new Error(message);
+    }
+  }
+
+  return new Error(fallback);
+}
+
 export async function registerUser(input: RegisterInput) {
   const email = input.email.trim().toLowerCase();
   const full_name = input.full_name.trim();
@@ -29,23 +45,23 @@ export async function registerUser(input: RegisterInput) {
     throw new Error('Please fill in all required fields.');
   }
 
-  const usersRef = collection(db, "users");
-  const existingQuery = query(usersRef, where("email", "==", email), limit(1));
-  const existingSnapshot = await getDocs(existingQuery);
-  if (!existingSnapshot.empty) {
-    throw new Error("Email already registered.");
+  try {
+    const response = await apiClient.post<AuthResponse>('/api/auth/register', {
+      email,
+      password,
+      full_name,
+    });
+
+    const data = response.data;
+
+    if (data.token) {
+      setToken(data.token);
+    }
+
+    return data;
+  } catch (error) {
+    throw getAuthError(error, 'Registration failed. Check your connection and try again.');
   }
-
-  const newUser = {
-    email,
-    full_name,
-    password,
-    created_at: new Date(),
-  };
-
-  const docRef = await addDoc(usersRef, newUser);
-
-  return { _id: docRef.id, email, full_name };
 }
 
 export async function loginUser(input: LoginInput) {
@@ -56,19 +72,33 @@ export async function loginUser(input: LoginInput) {
     throw new Error('Please enter your email and password.');
   }
 
-  const usersRef = collection(db, "users");
-  const loginQuery = query(
-    usersRef,
-    where("email", "==", email),
-    where("password", "==", password),
-    limit(1),
-  );
-  const snapshot = await getDocs(loginQuery);
-  if (snapshot.empty) {
-    throw new Error("Invalid email or password.");
-  }
+  try {
+    const response = await apiClient.post<AuthResponse>('/api/auth/login', {
+      email,
+      password,
+    });
 
-  const doc = snapshot.docs[0];
-  const user = doc?.data();
-  return { _id: doc?.id, ...user };
+    const data = response.data;
+
+    if (data.token) {
+      setToken(data.token);
+    }
+
+    return data;
+  } catch (error) {
+    throw getAuthError(error, 'Login failed. Check your connection and try again.');
+  }
+}
+
+export async function logoutUser() {
+  try {
+    await apiClient.post('/api/auth/logout');
+  } finally {
+    clearToken();
+  }
+}
+
+export async function getCurrentUser() {
+  const response = await apiClient.get('/api/auth/me');
+  return response.data;
 }

@@ -4,25 +4,34 @@ import sinon from 'sinon';
 import supertest from 'supertest';
 import axios from 'axios';
 import WebSocket from 'ws';
+import jwt from 'jsonwebtoken';
 import app from '@src/app';
 
 const { expect } = chai;
 const request = supertest(app);
 
+const JWT_SECRET = process.env.JWT_SECRET || 'default-dev-secret-change-in-production';
+
+function makeToken(): string {
+  return jwt.sign(
+    { userId: 'test-user-id', email: 'test@example.com' },
+    JWT_SECRET,
+    { expiresIn: '1h' }
+  );
+}
+
 describe('API Gateway ↔ Translation Service Integration', () => {
   let axiosStub: sinon.SinonStub;
+  let authToken: string;
 
   beforeEach(() => {
     axiosStub = sinon.stub(axios, 'post');
+    authToken = makeToken();
   });
 
   afterEach(() => {
     axiosStub.restore();
   });
-
-  // ===================================================================
-  // POST /api/convert — frame ingestion proxy
-  // ===================================================================
 
   describe('POST /api/convert', () => {
     let uuid: string;
@@ -33,9 +42,19 @@ describe('API Gateway ↔ Translation Service Integration', () => {
       uuid = `convert-test-${testCount}-${Date.now()}`;
     });
 
+    it('returns 401 without auth token', async () => {
+      const res = await request
+        .post('/api/convert')
+        .field('uuid', uuid)
+        .expect(401);
+
+      expect(res.body.message).to.match(/no authorization header/i);
+    });
+
     it('returns 400 when no file (rawImage) is uploaded', async () => {
       const res = await request
         .post('/api/convert')
+        .set('Authorization', `Bearer ${authToken}`)
         .field('uuid', uuid)
         .expect(400);
 
@@ -45,6 +64,7 @@ describe('API Gateway ↔ Translation Service Integration', () => {
     it('returns 400 when no uuid is provided', async () => {
       const res = await request
         .post('/api/convert')
+        .set('Authorization', `Bearer ${authToken}`)
         .attach('rawImage', Buffer.from('fake-jpeg-bytes'), 'frame.jpg')
         .expect(400);
 
@@ -56,6 +76,7 @@ describe('API Gateway ↔ Translation Service Integration', () => {
 
       const res = await request
         .post('/api/convert')
+        .set('Authorization', `Bearer ${authToken}`)
         .field('uuid', uuid)
         .attach('rawImage', Buffer.from('fake-jpeg-bytes'), 'frame.jpg')
         .expect(200);
@@ -73,6 +94,7 @@ describe('API Gateway ↔ Translation Service Integration', () => {
 
       const res = await request
         .post('/api/convert')
+        .set('Authorization', `Bearer ${authToken}`)
         .field('uuid', uuid)
         .attach('rawImage', Buffer.from('fake-jpeg-bytes'), 'frame.jpg')
         .expect(200);
@@ -92,6 +114,7 @@ describe('API Gateway ↔ Translation Service Integration', () => {
 
       await request
         .post('/api/convert')
+        .set('Authorization', `Bearer ${authToken}`)
         .field('uuid', uuid)
         .attach('rawImage', jpegBuffer, 'frame.jpg')
         .expect(200);
@@ -107,6 +130,7 @@ describe('API Gateway ↔ Translation Service Integration', () => {
 
       const res = await request
         .post('/api/convert')
+        .set('Authorization', `Bearer ${authToken}`)
         .field('uuid', uuid)
         .attach('rawImage', Buffer.from('fake-jpeg-bytes'), 'frame.jpg')
         .expect(500);
@@ -115,18 +139,15 @@ describe('API Gateway ↔ Translation Service Integration', () => {
     });
   });
 
-  // ===================================================================
-  // GET /api/stop/:uuid — end session proxy
-  // ===================================================================
-
   describe('GET /api/stop/:uuid', () => {
     const WS_UUID = 'stop-test-ws-uuid';
     let ws: WebSocket;
 
     before(async function () {
       this.timeout(5000);
+      const token = makeToken();
       ws = await new Promise<WebSocket>((resolve, reject) => {
-        const socket = new WebSocket(`ws://localhost:9898?uuid=${WS_UUID}`);
+        const socket = new WebSocket(`ws://localhost:9898?uuid=${WS_UUID}&token=${encodeURIComponent(token)}`);
         socket.on('open', () => resolve(socket));
         socket.on('error', reject);
         setTimeout(() => reject(new Error('WebSocket connection timeout')), 3000);
@@ -137,9 +158,18 @@ describe('API Gateway ↔ Translation Service Integration', () => {
       ws.close();
     });
 
+    it('returns 401 without auth token', async () => {
+      const res = await request
+        .get('/api/stop/non-existent-session')
+        .expect(401);
+
+      expect(res.body.message).to.match(/no authorization header/i);
+    });
+
     it('returns 404 for a UUID with no active WebSocket session', async () => {
       const res = await request
         .get('/api/stop/non-existent-session')
+        .set('Authorization', `Bearer ${authToken}`)
         .expect(404);
 
       expect(res.body.message).to.include('No active session');
@@ -147,8 +177,9 @@ describe('API Gateway ↔ Translation Service Integration', () => {
 
     it('returns translation result from merged service', async () => {
       const testUuid = `stop-result-${Date.now()}`;
+      const token = makeToken();
       const testWs = await new Promise<WebSocket>((resolve, reject) => {
-        const socket = new WebSocket(`ws://localhost:9898?uuid=${testUuid}`);
+        const socket = new WebSocket(`ws://localhost:9898?uuid=${testUuid}&token=${encodeURIComponent(token)}`);
         socket.on('open', () => resolve(socket));
         socket.on('error', reject);
         setTimeout(() => reject(new Error('WS timeout')), 3000);
@@ -165,6 +196,7 @@ describe('API Gateway ↔ Translation Service Integration', () => {
 
       const res = await request
         .get(`/api/stop/${testUuid}`)
+        .set('Authorization', `Bearer ${authToken}`)
         .expect(200);
 
       expect(res.text).to.include('Successfully finished sequence.');
@@ -179,8 +211,9 @@ describe('API Gateway ↔ Translation Service Integration', () => {
 
     it('returns 500 when translation service fails on stop', async () => {
       const testUuid = `stop-fail-${Date.now()}`;
+      const token = makeToken();
       const testWs = await new Promise<WebSocket>((resolve, reject) => {
-        const socket = new WebSocket(`ws://localhost:9898?uuid=${testUuid}`);
+        const socket = new WebSocket(`ws://localhost:9898?uuid=${testUuid}&token=${encodeURIComponent(token)}`);
         socket.on('open', () => resolve(socket));
         socket.on('error', reject);
         setTimeout(() => reject(new Error('WS timeout')), 3000);
@@ -190,6 +223,7 @@ describe('API Gateway ↔ Translation Service Integration', () => {
 
       const res = await request
         .get(`/api/stop/${testUuid}`)
+        .set('Authorization', `Bearer ${authToken}`)
         .expect(500);
 
       expect(res.body.message).to.match(/failed/i);

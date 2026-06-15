@@ -1,14 +1,12 @@
-
-
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { WS_BASE_URL } from '../config/environment';
+import { createWebSocketConnection } from '../services/api';
 
 interface UseGesturaWebSocketProps {
   uuid: string;
-  enabled?: boolean; // Control when to connect
-  autoReconnect?: boolean; // Auto-reconnect on disconnect
-  reconnectInterval?: number; // Delay between reconnect attempts (ms)
-  maxReconnectAttempts?: number; // Max number of reconnect attempts
+  enabled?: boolean;
+  autoReconnect?: boolean;
+  reconnectInterval?: number;
+  maxReconnectAttempts?: number;
 }
 
 interface WebSocketState {
@@ -36,13 +34,12 @@ export const useGesturaWebSocket = ({
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const shouldConnectRef = useRef(enabled);
+  const reconnectAttemptsRef = useRef(0);
 
-  // Update the shouldConnect ref when enabled changes
   useEffect(() => {
     shouldConnectRef.current = enabled;
   }, [enabled]);
 
-  // Connect to WebSocket
   const connect = useCallback(() => {
     if (!uuid || !shouldConnectRef.current) {
       console.log('WebSocket: Connection skipped (no UUID or not enabled)');
@@ -60,15 +57,24 @@ export const useGesturaWebSocket = ({
     }
 
     try {
-      const wsUrl = `${WS_BASE_URL}?uuid=${uuid}`;
-      console.log(`WebSocket: Connecting to ${wsUrl}`);
+      console.log(`WebSocket: Connecting for UUID ${uuid}`);
 
       setState(prev => ({ ...prev, isConnecting: true, error: null }));
 
-      const ws = new WebSocket(wsUrl);
+      const ws = createWebSocketConnection(uuid);
+      if (!ws) {
+        console.error('WebSocket: Failed to create connection (no token?)');
+        setState(prev => ({
+          ...prev,
+          isConnecting: false,
+          error: 'Authentication token not available',
+        }));
+        return;
+      }
 
       ws.onopen = () => {
         console.log('WebSocket: Connected successfully');
+        reconnectAttemptsRef.current = 0;
         setState({
           isConnected: true,
           isConnecting: false,
@@ -76,7 +82,6 @@ export const useGesturaWebSocket = ({
           reconnectAttempts: 0,
         });
 
-        // Clear any pending reconnect timeouts
         if (reconnectTimeoutRef.current) {
           clearTimeout(reconnectTimeoutRef.current);
           reconnectTimeoutRef.current = null;
@@ -84,29 +89,24 @@ export const useGesturaWebSocket = ({
       };
 
       ws.onmessage = (event) => {
-        // Expecting a JSON-stringified payload like: { uuid: "...", sentence: "..." }
         try {
           const raw = event.data;
           const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
           console.log('WebSocket: Raw message received:', parsed);
 
-          // Ensure payload has expected shape and the uuid matches (if provided)
           const payloadUuid = parsed?.uuid;
           const sentence = parsed?.sentence ?? parsed?.translation ?? parsed?.text;
 
-          // If a uuid is supplied in the payload and it doesn't match, ignore the message
           if (payloadUuid && payloadUuid !== uuid) {
             console.log('WebSocket: Ignoring message for different UUID:', payloadUuid);
             return;
           }
 
-          // Skip null/empty sentences
           if (!sentence || sentence === 'null') {
             console.log('WebSocket: Received empty/null sentence — skipping');
             return;
           }
 
-          // All good — update translation string (ensure string type)
           setTranslation(String(sentence));
         } catch (err) {
           console.error('WebSocket: Failed to parse incoming message:', err, event.data);
@@ -124,7 +124,7 @@ export const useGesturaWebSocket = ({
 
       ws.onclose = (event) => {
         console.log(`WebSocket: Disconnected (code: ${event.code}, reason: ${event.reason})`);
-        
+
         setState(prev => ({
           ...prev,
           isConnected: false,
@@ -133,24 +133,24 @@ export const useGesturaWebSocket = ({
 
         wsRef.current = null;
 
-        // Attempt to reconnect if enabled and within max attempts
         if (
-          autoReconnect && 
-          shouldConnectRef.current && 
-          state.reconnectAttempts < maxReconnectAttempts
+          autoReconnect &&
+          shouldConnectRef.current &&
+          reconnectAttemptsRef.current < maxReconnectAttempts
         ) {
-          const nextAttempt = state.reconnectAttempts + 1;
-          console.log(`WebSocket: Reconnecting (attempt ${nextAttempt}/${maxReconnectAttempts}) in ${reconnectInterval}ms...`);
-          
+          reconnectAttemptsRef.current += 1;
+          const attempt = reconnectAttemptsRef.current;
+          console.log(`WebSocket: Reconnecting (attempt ${attempt}/${maxReconnectAttempts}) in ${reconnectInterval}ms...`);
+
           setState(prev => ({
             ...prev,
-            reconnectAttempts: nextAttempt,
+            reconnectAttempts: attempt,
           }));
 
           reconnectTimeoutRef.current = setTimeout(() => {
             connect();
           }, reconnectInterval);
-        } else if (state.reconnectAttempts >= maxReconnectAttempts) {
+        } else if (reconnectAttemptsRef.current >= maxReconnectAttempts) {
           console.error('WebSocket: Max reconnection attempts reached');
           setState(prev => ({
             ...prev,
@@ -168,26 +168,23 @@ export const useGesturaWebSocket = ({
         error: error instanceof Error ? error.message : 'Connection failed',
       }));
     }
-  }, [uuid, autoReconnect, reconnectInterval, maxReconnectAttempts, state.reconnectAttempts]);
+  }, [uuid, autoReconnect, reconnectInterval, maxReconnectAttempts]);
 
-  // Disconnect from WebSocket
   const disconnect = useCallback(() => {
     console.log('WebSocket: Manually disconnecting...');
     shouldConnectRef.current = false;
 
-    // Clear any pending reconnect timeouts
     if (reconnectTimeoutRef.current) {
       clearTimeout(reconnectTimeoutRef.current);
       reconnectTimeoutRef.current = null;
     }
 
-    // Close the WebSocket connection
     if (wsRef.current) {
       wsRef.current.close(1000, 'Client disconnect');
       wsRef.current = null;
     }
 
-    // Reset state
+    reconnectAttemptsRef.current = 0;
     setState({
       isConnected: false,
       isConnecting: false,
@@ -198,7 +195,6 @@ export const useGesturaWebSocket = ({
     setTranslation('');
   }, []);
 
-  // Manual reconnect
   const reconnect = useCallback(() => {
     console.log('WebSocket: Manual reconnect triggered');
     disconnect();
@@ -208,12 +204,10 @@ export const useGesturaWebSocket = ({
     }, 500);
   }, [disconnect, connect]);
 
-  // Clear translation
   const clearTranslation = useCallback(() => {
     setTranslation('');
   }, []);
 
-  // Connect/disconnect based on enabled prop
   useEffect(() => {
     if (enabled && uuid) {
       connect();
@@ -221,7 +215,6 @@ export const useGesturaWebSocket = ({
       disconnect();
     }
 
-    // Cleanup on unmount
     return () => {
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current);
@@ -233,14 +226,11 @@ export const useGesturaWebSocket = ({
   }, [enabled, uuid, connect, disconnect]);
 
   return {
-    // State
     translation,
     isConnected: state.isConnected,
     isConnecting: state.isConnecting,
     error: state.error,
     reconnectAttempts: state.reconnectAttempts,
-    
-    // Actions
     connect,
     disconnect,
     reconnect,

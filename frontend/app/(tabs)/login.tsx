@@ -54,7 +54,7 @@ const Login = () => {
             <View style={styles.formCard}>
               <Text style={styles.title}>Login</Text>
               <View style={styles.signupRow}>
-              <Text style={styles.signupHint}>Don't have an account?</Text>
+              <Text style={styles.signupHint}>Don&apos;t have an account?</Text>
               <TouchableOpacity onPress={() => router.push('/(tabs)/registration')}>
                 <Text style={styles.signupLink}>Sign Up</Text>
               </TouchableOpacity>
