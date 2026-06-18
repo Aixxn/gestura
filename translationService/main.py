@@ -49,6 +49,7 @@ else:
     print("[CUDA] libdevice.10.bc not found in common locations.")
 
 import base64
+import threading
 import numpy as np
 import keras
 from fastapi import FastAPI, HTTPException
@@ -68,6 +69,76 @@ app = FastAPI(
 )
 
 # ---------------------------------------------------------------------------
+# Semantic Cache for Flan-T5 responses
+# ---------------------------------------------------------------------------
+
+class SemanticCache:
+    def __init__(self, threshold: float = 0.85):
+        self.threshold = threshold
+        self._inputs: list[str] = []
+        self._outputs: list[str] = []
+        self._embeddings: list[np.ndarray] = []
+        self._lock = threading.Lock()
+        self._embedder = None
+        self.available = True
+
+    def _get_embedder(self):
+        if self._embedder is None:
+            try:
+                from sentence_transformers import SentenceTransformer
+                self._embedder = SentenceTransformer("all-MiniLM-L6-v2")
+            except Exception as e:
+                print(f"[SemanticCache] Failed to load embedding model: {e}")
+                self.available = False
+        return self._embedder
+
+    def lookup(self, text: str) -> str | None:
+        if not self.available or not self._embeddings:
+            return None
+        embedder = self._get_embedder()
+        if embedder is None:
+            return None
+        try:
+            query_emb = embedder.encode(text)
+            with self._lock:
+                best_idx = -1
+                best_sim = -1.0
+                for i, stored_emb in enumerate(self._embeddings):
+                    denom = np.linalg.norm(query_emb) * np.linalg.norm(stored_emb) + 1e-10
+                    sim = float(np.dot(query_emb, stored_emb) / denom)
+                    if sim > best_sim:
+                        best_sim = sim
+                        best_idx = i
+                if best_sim >= self.threshold:
+                    print(f"[Cache HIT] '{text}' -> '{self._outputs[best_idx]}' "
+                          f"(sim={best_sim:.3f})")
+                    return self._outputs[best_idx]
+            return None
+        except Exception as e:
+            print(f"[SemanticCache] Lookup error: {e}")
+            return None
+
+    def store(self, text: str, output: str):
+        if not self.available:
+            return
+        embedder = self._get_embedder()
+        if embedder is None:
+            return
+        try:
+            emb = embedder.encode(text)
+            with self._lock:
+                self._inputs.append(text)
+                self._outputs.append(output)
+                self._embeddings.append(emb)
+        except Exception as e:
+            print(f"[SemanticCache] Store error: {e}")
+
+    @property
+    def size(self) -> int:
+        with self._lock:
+            return len(self._inputs)
+
+# ---------------------------------------------------------------------------
 # ASL Grammar Fixer
 # ---------------------------------------------------------------------------
 
@@ -82,6 +153,8 @@ class ASLGrammarFixer:
         self.prompt_template = (
             "translate ASL gloss to English: {asl_gloss}"
         )
+        cache_threshold = float(os.getenv("CACHE_SIMILARITY_THRESHOLD", "0.85"))
+        self.cache = SemanticCache(threshold=cache_threshold)
 
     def _load_model(self):
         if self._tokenizer is None or self._model is None:
@@ -96,6 +169,10 @@ class ASLGrammarFixer:
         cleaned_gloss = self._clean_gloss(asl_gloss)
         if not cleaned_gloss:
             return ""
+
+        cached = self.cache.lookup(cleaned_gloss)
+        if cached is not None:
+            return cached
 
         try:
             tokenizer, model = self._load_model()
@@ -119,6 +196,7 @@ class ASLGrammarFixer:
             translated = tokenizer.decode(output_ids[0], skip_special_tokens=True).strip()
             translated = self._clean_output(translated)
             if self._is_acceptable_polish(cleaned_gloss, translated):
+                self.cache.store(cleaned_gloss, translated)
                 return translated
             raise ValueError(f"FLAN-T5 returned invalid English output: {translated}")
         except Exception as e:

@@ -117,7 +117,7 @@ _MD_STILL_FRAMES = int(os.getenv("MD_STILL_FRAMES", "8"))
 
 _MODEL_PATH = os.path.join(_TS, "best_model.keras")
 _CLASSES_PATH = os.path.join(_TS, "sign_classes.npy")
-CONFIDENCE_THRESH = 0.5
+CONFIDENCE_THRESH = 0.7
 
 model = None
 word_mapping: list[str] = []
@@ -260,7 +260,13 @@ def predict_word(keypoints_sequence: list) -> tuple[str, float]:
     inp = np.array(normalized, dtype=np.float32)[np.newaxis, ...]
     probs = model.predict(inp, verbose=0)[0]
     idx = int(np.argmax(probs))
-    return word_mapping[idx], float(probs[idx])
+    conf = float(probs[idx])
+    # Reject low-confidence predictions — the model must be reasonably
+    # sure.  This filters out forced guesses on garbage input (e.g. the
+    # startup ramp-up before the smoother has converged).
+    if conf < CONFIDENCE_THRESH:
+        return "BACKGROUND", conf
+    return word_mapping[idx], conf
 
 
 # ------------------------------------------------------------------ #
@@ -353,7 +359,13 @@ def run():
             continue
         smoothed_kp = smoother.update(kp)
 
-        if not converter.is_idle:
+        if converter.is_idle:
+            # Reset stale state so md + smoother start fresh when
+            # hands reappear — prevents the EMA's zero-mean state
+            # from creating an artificial ramp-up in the sign buffer.
+            md.reset()
+            smoother.reset()
+        else:
             sign_ended, completed_sign = md.update(kp, store_kp=smoothed_kp)
 
             if sign_ended and completed_sign is not None:

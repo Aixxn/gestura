@@ -33,10 +33,18 @@ class _MockConverter:
         self._lh_lost_counter = 0
         self._rh_lost_counter = 0
 
+    @property
+    def is_idle(self) -> bool:
+        """Mirrors the real Converter.is_idle: both hands absent for >= IDLE_THRESHOLD (15) frames."""
+        return False  # default to not idle so tests reach the motion detector
+
     def point_detection(self, image_bytes: bytes) -> np.ndarray:
         return np.zeros(258, dtype=np.float32)
 
     def get_persisted_keypoints(self) -> np.ndarray:
+        return np.zeros(258, dtype=np.float32)
+
+    def get_raw_keypoints(self) -> np.ndarray:
         return np.zeros(258, dtype=np.float32)
 
     def _build_unified_kp(self) -> np.ndarray:

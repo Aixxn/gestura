@@ -60,3 +60,4 @@ opencv-python==4.11.0.86
 opencv-contrib-python==4.11.0.86
 mediapipe>=0.10.21
 sentencepiece==0.2.0
+sentence-transformers>=3.0.0
