@@ -500,7 +500,8 @@ async def process_frame(request: FrameRequest):
 
             sign_idx = session["sign_count"]
             session["sign_count"] += 1
-            session["predicted_words"].append(word)
+            if not session["predicted_words"] or session["predicted_words"][-1] != word:
+                session["predicted_words"].append(word)
             return FrameResponse(
                 status="word_detected",
                 word=word,

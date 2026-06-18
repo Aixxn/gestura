@@ -375,14 +375,32 @@ class TestProcessFrame:
         uuid = "acc-test-uuid"
         fake_sign = [np.zeros(258, dtype=np.float32) for _ in range(3)]
         self._make_session_with_mock_md(uuid, (True, fake_sign))
-        for _ in range(2):
-            client.post("/process-frame", json={
-                "uuid": uuid,
-                "image_bytes": mock_image_bytes,
-            })
+        words_iter = iter(["HELLO", "WORLD"])
+        with patch("main._predict_word", side_effect=lambda kp: next(words_iter)):
+            for _ in range(2):
+                client.post("/process-frame", json={
+                    "uuid": uuid,
+                    "image_bytes": mock_image_bytes,
+                })
         session = svc.session_states.get(uuid)
         assert session is not None
         assert len(session["predicted_words"]) == 2
+        assert session["predicted_words"] == ["HELLO", "WORLD"]
+
+    def test_deduplicates_consecutive_words(self, mock_image_bytes):
+        uuid = "dedup-test-uuid"
+        fake_sign = [np.zeros(258, dtype=np.float32) for _ in range(3)]
+        self._make_session_with_mock_md(uuid, (True, fake_sign))
+        with patch("main._predict_word", return_value="HELLO"):
+            for _ in range(2):
+                client.post("/process-frame", json={
+                    "uuid": uuid,
+                    "image_bytes": mock_image_bytes,
+                })
+        session = svc.session_states.get(uuid)
+        assert session is not None
+        assert len(session["predicted_words"]) == 1
+        assert session["predicted_words"] == ["HELLO"]
 
     def test_error_returns_500(self, mock_image_bytes):
         uuid = "err-test-uuid"

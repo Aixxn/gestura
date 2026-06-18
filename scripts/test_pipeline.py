@@ -388,7 +388,8 @@ def run():
                           f"frames={len(completed_sign)}  dur={dur:.2f}s  motion={sm_m:.4f}")
                     continue
 
-                words.append(word)
+                if not words or words[-1] != word:
+                    words.append(word)
                 last_word = word
                 last_conf = conf
                 word_ttl = 60
