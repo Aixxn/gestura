@@ -33,10 +33,18 @@ class _MockConverter:
         self._lh_lost_counter = 0
         self._rh_lost_counter = 0
 
+    @property
+    def is_idle(self) -> bool:
+        """Mirrors the real Converter.is_idle: both hands absent for >= IDLE_THRESHOLD (15) frames."""
+        return False  # default to not idle so tests reach the motion detector
+
     def point_detection(self, image_bytes: bytes) -> np.ndarray:
         return np.zeros(258, dtype=np.float32)
 
     def get_persisted_keypoints(self) -> np.ndarray:
+        return np.zeros(258, dtype=np.float32)
+
+    def get_raw_keypoints(self) -> np.ndarray:
         return np.zeros(258, dtype=np.float32)
 
     def _build_unified_kp(self) -> np.ndarray:
@@ -156,7 +164,7 @@ class TestASLGrammarFixer:
         result = fixer.fix_grammar("ME HUNGRY")
         assert result == "I am hungry."
 
-    def test_fix_grammar_rejects_echoed_simple_sentence(self, monkeypatch):
+    def test_fix_grammar_falls_back_for_echoed_simple_sentence(self, monkeypatch):
         class FakeInputs(dict):
             def to(self, _device):
                 return self
@@ -181,8 +189,34 @@ class TestASLGrammarFixer:
             lambda: (FakeTokenizer(), FakeModel()),
         )
 
-        with pytest.raises(ValueError, match="invalid English output"):
-            fixer.fix_grammar("I DRINK WATER")
+        assert fixer.fix_grammar("I DRINK WATER") == "I drink water."
+
+    def test_fix_grammar_falls_back_for_echoed_asl_gloss(self, monkeypatch):
+        class FakeInputs(dict):
+            def to(self, _device):
+                return self
+
+        class FakeTokenizer:
+            def __call__(self, *_args, **_kwargs):
+                return FakeInputs({"input_ids": [1]})
+
+            def decode(self, *_args, **_kwargs):
+                return "ME EAT APPLE"
+
+        class FakeModel:
+            device = "cpu"
+
+            def generate(self, **_kwargs):
+                return [[101]]
+
+        fixer = svc.ASLGrammarFixer()
+        monkeypatch.setattr(
+            fixer,
+            "_load_model",
+            lambda: (FakeTokenizer(), FakeModel()),
+        )
+
+        assert fixer.fix_grammar("ME EAT APPLE") == "I eat an apple."
 
     def test_fix_grammar_accepts_model_structured_sentence(self, monkeypatch):
         class FakeInputs(dict):
@@ -242,7 +276,7 @@ class TestASLGrammarFixer:
         result = fixer.fix_grammar("PLEASE PLEASE DRINK HOME MILK MILK")
         assert result == "Please drink milk at home."
 
-    def test_fix_grammar_rejects_gloss_like_model_output(self, monkeypatch):
+    def test_fix_grammar_falls_back_for_gloss_like_model_output(self, monkeypatch):
         class FakeInputs(dict):
             def to(self, _device):
                 return self
@@ -267,10 +301,9 @@ class TestASLGrammarFixer:
             lambda: (FakeTokenizer(), FakeModel()),
         )
 
-        with pytest.raises(ValueError, match="invalid English output"):
-            fixer.fix_grammar("PLEASE PLEASE DRINK HOME MILK MILK")
+        assert fixer.fix_grammar("PLEASE PLEASE DRINK HOME MILK MILK") == "Please drink milk at home."
 
-    def test_fix_grammar_rejects_prompt_artifact(self, monkeypatch):
+    def test_fix_grammar_falls_back_for_prompt_artifact(self, monkeypatch):
         class FakeInputs(dict):
             def to(self, _device):
                 return self
@@ -295,8 +328,7 @@ class TestASLGrammarFixer:
             lambda: (FakeTokenizer(), FakeModel()),
         )
 
-        with pytest.raises(ValueError, match="invalid English output"):
-            fixer.fix_grammar("I DRINK WATER")
+        assert fixer.fix_grammar("I DRINK WATER") == "I drink water."
 
 
 # ===================================================================
@@ -367,14 +399,32 @@ class TestProcessFrame:
         uuid = "acc-test-uuid"
         fake_sign = [np.zeros(258, dtype=np.float32) for _ in range(3)]
         self._make_session_with_mock_md(uuid, (True, fake_sign))
-        for _ in range(2):
-            client.post("/process-frame", json={
-                "uuid": uuid,
-                "image_bytes": mock_image_bytes,
-            })
+        words_iter = iter(["HELLO", "WORLD"])
+        with patch("main._predict_word", side_effect=lambda kp: next(words_iter)):
+            for _ in range(2):
+                client.post("/process-frame", json={
+                    "uuid": uuid,
+                    "image_bytes": mock_image_bytes,
+                })
         session = svc.session_states.get(uuid)
         assert session is not None
         assert len(session["predicted_words"]) == 2
+        assert session["predicted_words"] == ["HELLO", "WORLD"]
+
+    def test_deduplicates_consecutive_words(self, mock_image_bytes):
+        uuid = "dedup-test-uuid"
+        fake_sign = [np.zeros(258, dtype=np.float32) for _ in range(3)]
+        self._make_session_with_mock_md(uuid, (True, fake_sign))
+        with patch("main._predict_word", return_value="HELLO"):
+            for _ in range(2):
+                client.post("/process-frame", json={
+                    "uuid": uuid,
+                    "image_bytes": mock_image_bytes,
+                })
+        session = svc.session_states.get(uuid)
+        assert session is not None
+        assert len(session["predicted_words"]) == 1
+        assert session["predicted_words"] == ["HELLO"]
 
     def test_error_returns_500(self, mock_image_bytes):
         uuid = "err-test-uuid"

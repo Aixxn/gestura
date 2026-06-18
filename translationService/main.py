@@ -49,6 +49,7 @@ else:
     print("[CUDA] libdevice.10.bc not found in common locations.")
 
 import base64
+import threading
 import numpy as np
 import keras
 from fastapi import FastAPI, HTTPException
@@ -68,6 +69,76 @@ app = FastAPI(
 )
 
 # ---------------------------------------------------------------------------
+# Semantic Cache for Flan-T5 responses
+# ---------------------------------------------------------------------------
+
+class SemanticCache:
+    def __init__(self, threshold: float = 0.85):
+        self.threshold = threshold
+        self._inputs: list[str] = []
+        self._outputs: list[str] = []
+        self._embeddings: list[np.ndarray] = []
+        self._lock = threading.Lock()
+        self._embedder = None
+        self.available = True
+
+    def _get_embedder(self):
+        if self._embedder is None:
+            try:
+                from sentence_transformers import SentenceTransformer
+                self._embedder = SentenceTransformer("all-MiniLM-L6-v2")
+            except Exception as e:
+                print(f"[SemanticCache] Failed to load embedding model: {e}")
+                self.available = False
+        return self._embedder
+
+    def lookup(self, text: str) -> str | None:
+        if not self.available or not self._embeddings:
+            return None
+        embedder = self._get_embedder()
+        if embedder is None:
+            return None
+        try:
+            query_emb = embedder.encode(text)
+            with self._lock:
+                best_idx = -1
+                best_sim = -1.0
+                for i, stored_emb in enumerate(self._embeddings):
+                    denom = np.linalg.norm(query_emb) * np.linalg.norm(stored_emb) + 1e-10
+                    sim = float(np.dot(query_emb, stored_emb) / denom)
+                    if sim > best_sim:
+                        best_sim = sim
+                        best_idx = i
+                if best_sim >= self.threshold:
+                    print(f"[Cache HIT] '{text}' -> '{self._outputs[best_idx]}' "
+                          f"(sim={best_sim:.3f})")
+                    return self._outputs[best_idx]
+            return None
+        except Exception as e:
+            print(f"[SemanticCache] Lookup error: {e}")
+            return None
+
+    def store(self, text: str, output: str):
+        if not self.available:
+            return
+        embedder = self._get_embedder()
+        if embedder is None:
+            return
+        try:
+            emb = embedder.encode(text)
+            with self._lock:
+                self._inputs.append(text)
+                self._outputs.append(output)
+                self._embeddings.append(emb)
+        except Exception as e:
+            print(f"[SemanticCache] Store error: {e}")
+
+    @property
+    def size(self) -> int:
+        with self._lock:
+            return len(self._inputs)
+
+# ---------------------------------------------------------------------------
 # ASL Grammar Fixer
 # ---------------------------------------------------------------------------
 
@@ -82,6 +153,8 @@ class ASLGrammarFixer:
         self.prompt_template = (
             "translate ASL gloss to English: {asl_gloss}"
         )
+        cache_threshold = float(os.getenv("CACHE_SIMILARITY_THRESHOLD", "0.85"))
+        self.cache = SemanticCache(threshold=cache_threshold)
 
     def _load_model(self):
         if self._tokenizer is None or self._model is None:
@@ -97,6 +170,11 @@ class ASLGrammarFixer:
         if not cleaned_gloss:
             return ""
 
+        cached = self.cache.lookup(cleaned_gloss)
+        if cached is not None:
+            return cached
+
+        fallback = self._rule_based_translate(cleaned_gloss)
         try:
             tokenizer, model = self._load_model()
             prompt = self.prompt_template.format(asl_gloss=cleaned_gloss)
@@ -119,10 +197,14 @@ class ASLGrammarFixer:
             translated = tokenizer.decode(output_ids[0], skip_special_tokens=True).strip()
             translated = self._clean_output(translated)
             if self._is_acceptable_polish(cleaned_gloss, translated):
+                self.cache.store(cleaned_gloss, translated)
                 return translated
             raise ValueError(f"FLAN-T5 returned invalid English output: {translated}")
         except Exception as e:
             print(f"FLAN-T5 Error: {e}")
+            if fallback:
+                self.cache.store(cleaned_gloss, fallback)
+                return fallback
             raise e
 
     def _clean_output(self, text: str) -> str:
@@ -179,6 +261,16 @@ class ASLGrammarFixer:
             return "I am hungry and want to eat."
         if tokens == ["YESTERDAY", "ME", "GO", "STORE", "BUY", "MILK"]:
             return "Yesterday, I went to the store to buy milk."
+        if tokens == ["WHAT", "YOU", "WANT"]:
+            return "What do you want?"
+        if tokens == ["WHERE", "MOTHER", "GO"]:
+            return "Where does mother go?"
+        if tokens == ["MY", "NAME"]:
+            return "My name is Gestura."
+        if tokens == ["YES"]:
+            return "Yes."
+        if tokens == ["NO"]:
+            return "No."
 
         pronouns = {
             "ME": "I",
@@ -188,12 +280,18 @@ class ASLGrammarFixer:
             "SHE": "she",
             "WE": "we",
             "THEY": "they",
+            "MOTHER": "mother",
+            "FRIEND": "friend",
         }
         adjectives = {
             "HUNGRY": "hungry",
             "THIRSTY": "thirsty",
             "HAPPY": "happy",
             "SAD": "sad",
+            "ANGRY": "angry",
+            "TIRED": "tired",
+            "GOOD": "good",
+            "BAD": "bad",
         }
         verbs = {
             "DRINK": "drink",
@@ -202,6 +300,8 @@ class ASLGrammarFixer:
             "WANT": "want",
             "GO": "go",
             "BUY": "buy",
+            "SEE": "see",
+            "ASK": "ask",
         }
         nouns = {
             "WATER": "water",
@@ -211,6 +311,8 @@ class ASLGrammarFixer:
             "BANANA": "a banana",
             "STORE": "the store",
             "FOOD": "food",
+            "FRIEND": "a friend",
+            "MOTHER": "mother",
         }
         locations = {
             "HOME": "at home",
@@ -244,7 +346,9 @@ class ASLGrammarFixer:
         if subject_token in pronouns and verb_token in adjectives:
             subject = pronouns[subject_token]
             sentence = f"{subject} am {adjectives[verb_token]}."
-            if subject != "I":
+            if subject in {"you", "we", "they"}:
+                sentence = f"{subject} are {adjectives[verb_token]}."
+            elif subject != "I":
                 sentence = f"{subject} is {adjectives[verb_token]}."
             return sentence[0].upper() + sentence[1:]
 
@@ -256,9 +360,9 @@ class ASLGrammarFixer:
             if is_question and subject == "you":
                 return f"Do you {verb}{(' ' + obj) if obj else ''}?"
 
-            if subject in {"he", "she"} and verb not in {"go"}:
+            if subject in {"he", "she", "mother", "friend"} and verb not in {"go"}:
                 verb = f"{verb}s"
-            elif subject in {"he", "she"} and verb == "go":
+            elif subject in {"he", "she", "mother", "friend"} and verb == "go":
                 verb = "goes"
 
             sentence = f"{subject} {verb}{(' ' + obj) if obj else ''}."
@@ -364,6 +468,10 @@ class WindowInput(BaseModel):
     )
 
 # ---------------------------------------------------------------------------
+# Confidence floor — predictions below this are treated as BACKGROUND.
+# Prevents the model from force-guessing on garbage/ambiguous input.
+CONFIDENCE_THRESH = 0.7
+
 # Helper: run ML inference on a completed sign
 # ---------------------------------------------------------------------------
 
@@ -375,8 +483,11 @@ def _predict_word(keypoints_sequence: list[list[float]]) -> str:
     inp = window_np[np.newaxis, ...]
     probs = model.predict(inp, verbose=0)
     idx = int(np.argmax(probs[0]))
+    conf = float(probs[0][idx])
     if idx >= len(WORD_MAPPING):
         return "unknown"
+    if conf < CONFIDENCE_THRESH:
+        return "BACKGROUND"
     return WORD_MAPPING[idx]
 
 # ---------------------------------------------------------------------------
@@ -422,7 +533,8 @@ async def process_frame(request: FrameRequest):
 
             sign_idx = session["sign_count"]
             session["sign_count"] += 1
-            session["predicted_words"].append(word)
+            if not session["predicted_words"] or session["predicted_words"][-1] != word:
+                session["predicted_words"].append(word)
             return FrameResponse(
                 status="word_detected",
                 word=word,

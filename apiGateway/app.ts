@@ -1,16 +1,17 @@
 import createError from 'http-errors';
 import express, {Request, Response, NextFunction} from 'express';
 import cookieParser from 'cookie-parser';
-import logger from 'morgan';
 import translationRouter from 'routes/api';
 import authRouter from 'routes/auth';
+import { requestLogger, responseLogger } from 'middleware/logging';
 
 const app = express();
 
-app.use(logger('dev'));
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 app.use(cookieParser());
+app.use(requestLogger);
+app.use(responseLogger);
 
 // enpoints/routes
 app.use('/api', translationRouter);
@@ -35,4 +36,3 @@ app.use((err: any, req: Request, res: Response, _next: NextFunction) => {
 });
 
 export default app;
-

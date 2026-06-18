@@ -116,8 +116,11 @@ class Converter:
 
         # Lost-frame counters for bounded persistence.
         # Incremented each frame a hand is undetected; reset on detection.
-        self._lh_lost_counter = 0
-        self._rh_lost_counter = 0
+        # Start at IDLE_THRESHOLD so is_idle is True at init — prevents
+        # the motion detector from firing false boundaries on the first
+        # ~15 frames before the user has started signing.
+        self._lh_lost_counter = IDLE_THRESHOLD
+        self._rh_lost_counter = IDLE_THRESHOLD
 
         # Unnormalised raw components from the most recent frame; used by
         # _build_unified_kp() to reconstruct a bounded-persistence vector.
@@ -193,8 +196,8 @@ class Converter:
         Call between videos during batch extraction so bounded-persistence
         counters don't carry over from one video to the next.
         """
-        self._lh_lost_counter = 0
-        self._rh_lost_counter = 0
+        self._lh_lost_counter = IDLE_THRESHOLD
+        self._rh_lost_counter = IDLE_THRESHOLD
         self._last_lh = np.zeros(_LH_DIM, dtype=np.float32)
         self._last_rh = np.zeros(_RH_DIM, dtype=np.float32)
         self._last_pose = np.zeros(_POSE_DIM, dtype=np.float32)
