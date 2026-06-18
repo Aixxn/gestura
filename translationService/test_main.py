@@ -164,7 +164,7 @@ class TestASLGrammarFixer:
         result = fixer.fix_grammar("ME HUNGRY")
         assert result == "I am hungry."
 
-    def test_fix_grammar_rejects_echoed_simple_sentence(self, monkeypatch):
+    def test_fix_grammar_falls_back_for_echoed_simple_sentence(self, monkeypatch):
         class FakeInputs(dict):
             def to(self, _device):
                 return self
@@ -189,8 +189,34 @@ class TestASLGrammarFixer:
             lambda: (FakeTokenizer(), FakeModel()),
         )
 
-        with pytest.raises(ValueError, match="invalid English output"):
-            fixer.fix_grammar("I DRINK WATER")
+        assert fixer.fix_grammar("I DRINK WATER") == "I drink water."
+
+    def test_fix_grammar_falls_back_for_echoed_asl_gloss(self, monkeypatch):
+        class FakeInputs(dict):
+            def to(self, _device):
+                return self
+
+        class FakeTokenizer:
+            def __call__(self, *_args, **_kwargs):
+                return FakeInputs({"input_ids": [1]})
+
+            def decode(self, *_args, **_kwargs):
+                return "ME EAT APPLE"
+
+        class FakeModel:
+            device = "cpu"
+
+            def generate(self, **_kwargs):
+                return [[101]]
+
+        fixer = svc.ASLGrammarFixer()
+        monkeypatch.setattr(
+            fixer,
+            "_load_model",
+            lambda: (FakeTokenizer(), FakeModel()),
+        )
+
+        assert fixer.fix_grammar("ME EAT APPLE") == "I eat an apple."
 
     def test_fix_grammar_accepts_model_structured_sentence(self, monkeypatch):
         class FakeInputs(dict):
@@ -250,7 +276,7 @@ class TestASLGrammarFixer:
         result = fixer.fix_grammar("PLEASE PLEASE DRINK HOME MILK MILK")
         assert result == "Please drink milk at home."
 
-    def test_fix_grammar_rejects_gloss_like_model_output(self, monkeypatch):
+    def test_fix_grammar_falls_back_for_gloss_like_model_output(self, monkeypatch):
         class FakeInputs(dict):
             def to(self, _device):
                 return self
@@ -275,10 +301,9 @@ class TestASLGrammarFixer:
             lambda: (FakeTokenizer(), FakeModel()),
         )
 
-        with pytest.raises(ValueError, match="invalid English output"):
-            fixer.fix_grammar("PLEASE PLEASE DRINK HOME MILK MILK")
+        assert fixer.fix_grammar("PLEASE PLEASE DRINK HOME MILK MILK") == "Please drink milk at home."
 
-    def test_fix_grammar_rejects_prompt_artifact(self, monkeypatch):
+    def test_fix_grammar_falls_back_for_prompt_artifact(self, monkeypatch):
         class FakeInputs(dict):
             def to(self, _device):
                 return self
@@ -303,8 +328,7 @@ class TestASLGrammarFixer:
             lambda: (FakeTokenizer(), FakeModel()),
         )
 
-        with pytest.raises(ValueError, match="invalid English output"):
-            fixer.fix_grammar("I DRINK WATER")
+        assert fixer.fix_grammar("I DRINK WATER") == "I drink water."
 
 
 # ===================================================================

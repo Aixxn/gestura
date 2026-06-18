@@ -174,6 +174,7 @@ class ASLGrammarFixer:
         if cached is not None:
             return cached
 
+        fallback = self._rule_based_translate(cleaned_gloss)
         try:
             tokenizer, model = self._load_model()
             prompt = self.prompt_template.format(asl_gloss=cleaned_gloss)
@@ -201,6 +202,9 @@ class ASLGrammarFixer:
             raise ValueError(f"FLAN-T5 returned invalid English output: {translated}")
         except Exception as e:
             print(f"FLAN-T5 Error: {e}")
+            if fallback:
+                self.cache.store(cleaned_gloss, fallback)
+                return fallback
             raise e
 
     def _clean_output(self, text: str) -> str:
@@ -257,6 +261,16 @@ class ASLGrammarFixer:
             return "I am hungry and want to eat."
         if tokens == ["YESTERDAY", "ME", "GO", "STORE", "BUY", "MILK"]:
             return "Yesterday, I went to the store to buy milk."
+        if tokens == ["WHAT", "YOU", "WANT"]:
+            return "What do you want?"
+        if tokens == ["WHERE", "MOTHER", "GO"]:
+            return "Where does mother go?"
+        if tokens == ["MY", "NAME"]:
+            return "My name is Gestura."
+        if tokens == ["YES"]:
+            return "Yes."
+        if tokens == ["NO"]:
+            return "No."
 
         pronouns = {
             "ME": "I",
@@ -266,12 +280,18 @@ class ASLGrammarFixer:
             "SHE": "she",
             "WE": "we",
             "THEY": "they",
+            "MOTHER": "mother",
+            "FRIEND": "friend",
         }
         adjectives = {
             "HUNGRY": "hungry",
             "THIRSTY": "thirsty",
             "HAPPY": "happy",
             "SAD": "sad",
+            "ANGRY": "angry",
+            "TIRED": "tired",
+            "GOOD": "good",
+            "BAD": "bad",
         }
         verbs = {
             "DRINK": "drink",
@@ -280,6 +300,8 @@ class ASLGrammarFixer:
             "WANT": "want",
             "GO": "go",
             "BUY": "buy",
+            "SEE": "see",
+            "ASK": "ask",
         }
         nouns = {
             "WATER": "water",
@@ -289,6 +311,8 @@ class ASLGrammarFixer:
             "BANANA": "a banana",
             "STORE": "the store",
             "FOOD": "food",
+            "FRIEND": "a friend",
+            "MOTHER": "mother",
         }
         locations = {
             "HOME": "at home",
@@ -322,7 +346,9 @@ class ASLGrammarFixer:
         if subject_token in pronouns and verb_token in adjectives:
             subject = pronouns[subject_token]
             sentence = f"{subject} am {adjectives[verb_token]}."
-            if subject != "I":
+            if subject in {"you", "we", "they"}:
+                sentence = f"{subject} are {adjectives[verb_token]}."
+            elif subject != "I":
                 sentence = f"{subject} is {adjectives[verb_token]}."
             return sentence[0].upper() + sentence[1:]
 
@@ -334,9 +360,9 @@ class ASLGrammarFixer:
             if is_question and subject == "you":
                 return f"Do you {verb}{(' ' + obj) if obj else ''}?"
 
-            if subject in {"he", "she"} and verb not in {"go"}:
+            if subject in {"he", "she", "mother", "friend"} and verb not in {"go"}:
                 verb = f"{verb}s"
-            elif subject in {"he", "she"} and verb == "go":
+            elif subject in {"he", "she", "mother", "friend"} and verb == "go":
                 verb = "goes"
 
             sentence = f"{subject} {verb}{(' ' + obj) if obj else ''}."
