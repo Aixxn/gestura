@@ -442,6 +442,10 @@ class WindowInput(BaseModel):
     )
 
 # ---------------------------------------------------------------------------
+# Confidence floor — predictions below this are treated as BACKGROUND.
+# Prevents the model from force-guessing on garbage/ambiguous input.
+CONFIDENCE_THRESH = 0.7
+
 # Helper: run ML inference on a completed sign
 # ---------------------------------------------------------------------------
 
@@ -453,8 +457,11 @@ def _predict_word(keypoints_sequence: list[list[float]]) -> str:
     inp = window_np[np.newaxis, ...]
     probs = model.predict(inp, verbose=0)
     idx = int(np.argmax(probs[0]))
+    conf = float(probs[0][idx])
     if idx >= len(WORD_MAPPING):
         return "unknown"
+    if conf < CONFIDENCE_THRESH:
+        return "BACKGROUND"
     return WORD_MAPPING[idx]
 
 # ---------------------------------------------------------------------------
