@@ -1,6 +1,7 @@
 import axios from 'axios';
 
 import apiClient from './api';
+import { API_BASE_URL } from '../config/environment';
 import { setToken, clearToken } from './token';
 
 export interface RegisterInput {
@@ -31,6 +32,8 @@ function getAuthError(error: unknown, fallback: string): Error {
     if (typeof message === 'string' && message.length > 0) {
       return new Error(message);
     }
+
+    return new Error(`${fallback} (${error.message}; ${API_BASE_URL})`);
   }
 
   return new Error(fallback);
