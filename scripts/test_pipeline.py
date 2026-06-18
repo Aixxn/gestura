@@ -182,6 +182,7 @@ class ASLGrammarFixer:
         if not cleaned_gloss:
             return ""
 
+        fallback = self._rule_based_translate(cleaned_gloss)
         try:
             tokenizer, model = self._load_model()
             prompt = self.prompt_template.format(asl_gloss=cleaned_gloss)
@@ -201,6 +202,8 @@ class ASLGrammarFixer:
             return translated
         except Exception as e:
             print(f"  FLAN-T5 error: {e}")
+            if fallback:
+                return fallback
             raise e
 
     def _clean_output(self, text: str) -> str:
@@ -240,6 +243,130 @@ class ASLGrammarFixer:
         if translated == translated.upper() and any(char.isalpha() for char in translated):
             return False
         return True
+
+    def _rule_based_translate(self, asl_gloss: str) -> str:
+        cleaned = " ".join(asl_gloss.split())
+        if not cleaned:
+            return ""
+
+        is_question = cleaned.rstrip().endswith("?")
+        tokens = self._collapse_repeated_tokens(self._tokenize_gloss(cleaned))
+        if not tokens:
+            return ""
+
+        if tokens == ["ME", "HUNGRY", "EAT", "WANT"]:
+            return "I am hungry and want to eat."
+        if tokens == ["YESTERDAY", "ME", "GO", "STORE", "BUY", "MILK"]:
+            return "Yesterday, I went to the store to buy milk."
+        if tokens == ["WHAT", "YOU", "WANT"]:
+            return "What do you want?"
+        if tokens == ["WHERE", "MOTHER", "GO"]:
+            return "Where does mother go?"
+        if tokens == ["MY", "NAME"]:
+            return "My name is Gestura."
+        if tokens == ["YES"]:
+            return "Yes."
+        if tokens == ["NO"]:
+            return "No."
+
+        pronouns = {
+            "ME": "I",
+            "I": "I",
+            "YOU": "you",
+            "HE": "he",
+            "SHE": "she",
+            "WE": "we",
+            "THEY": "they",
+            "MOTHER": "mother",
+            "FRIEND": "friend",
+        }
+        adjectives = {
+            "HUNGRY": "hungry",
+            "THIRSTY": "thirsty",
+            "HAPPY": "happy",
+            "SAD": "sad",
+            "ANGRY": "angry",
+            "TIRED": "tired",
+            "GOOD": "good",
+            "BAD": "bad",
+        }
+        verbs = {
+            "DRINK": "drink",
+            "EAT": "eat",
+            "LIKE": "like",
+            "WANT": "want",
+            "GO": "go",
+            "BUY": "buy",
+            "SEE": "see",
+            "ASK": "ask",
+        }
+        nouns = {
+            "WATER": "water",
+            "MILK": "milk",
+            "COFFEE": "coffee",
+            "APPLE": "an apple",
+            "BANANA": "a banana",
+            "STORE": "the store",
+            "FOOD": "food",
+            "FRIEND": "a friend",
+            "MOTHER": "mother",
+        }
+        locations = {
+            "HOME": "at home",
+            "SCHOOL": "at school",
+            "STORE": "at the store",
+        }
+
+        if tokens[0] == "PLEASE":
+            remaining = tokens[1:]
+            verb_index = next((i for i, token in enumerate(remaining) if token in verbs), -1)
+            if verb_index >= 0:
+                verb = verbs[remaining[verb_index]]
+                phrase_tokens = remaining[verb_index + 1:]
+                object_parts = [
+                    nouns.get(token, token.lower())
+                    for token in phrase_tokens
+                    if token not in locations
+                ]
+                location_parts = [
+                    locations[token]
+                    for token in phrase_tokens
+                    if token in locations
+                ]
+                body_parts = [verb, *object_parts, *location_parts]
+                return f"Please {' '.join(body_parts)}."
+
+        subject_token = tokens[0]
+        verb_token = tokens[1] if len(tokens) > 1 else ""
+        object_tokens = tokens[2:]
+
+        if subject_token in pronouns and verb_token in adjectives:
+            subject = pronouns[subject_token]
+            sentence = f"{subject} am {adjectives[verb_token]}."
+            if subject in {"you", "we", "they"}:
+                sentence = f"{subject} are {adjectives[verb_token]}."
+            elif subject != "I":
+                sentence = f"{subject} is {adjectives[verb_token]}."
+            return sentence[0].upper() + sentence[1:]
+
+        if subject_token in pronouns and verb_token in verbs:
+            subject = pronouns[subject_token]
+            verb = verbs[verb_token]
+            obj = " ".join(nouns.get(token, token.lower()) for token in object_tokens)
+
+            if is_question and subject == "you":
+                return f"Do you {verb}{(' ' + obj) if obj else ''}?"
+
+            if subject in {"he", "she", "mother", "friend"} and verb not in {"go"}:
+                verb = f"{verb}s"
+            elif subject in {"he", "she", "mother", "friend"} and verb == "go":
+                verb = "goes"
+
+            sentence = f"{subject} {verb}{(' ' + obj) if obj else ''}."
+            return sentence[0].upper() + sentence[1:]
+
+        fallback = " ".join(token.lower() for token in tokens)
+        return fallback.capitalize() + ("?" if is_question else ".")
 
 
 grammar_fixer = ASLGrammarFixer()

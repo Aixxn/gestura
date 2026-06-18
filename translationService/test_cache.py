@@ -361,10 +361,10 @@ class TestCacheGrammarFixerIntegration:
             assert result2 == "I am hungry."
             mock_load.assert_not_called()
 
-    # --- Invalid output not cached ---
+    # --- Invalid model output fallback ---
 
-    def test_invalid_output_not_stored(self):
-        """If Flan-T5 returns invalid (all-caps), cache.store should not be called."""
+    def test_invalid_output_falls_back_and_stores_fallback(self):
+        """If Flan-T5 returns invalid output, the deterministic fallback is cached."""
         class FakeTokenizer:
             def __call__(self, *_a, **_kw):
                 return {"input_ids": [1]}
@@ -382,9 +382,9 @@ class TestCacheGrammarFixerIntegration:
 
         with patch.object(fixer.cache, "lookup", return_value=None), \
              patch.object(fixer.cache, "store") as mock_store:
-            with pytest.raises(ValueError, match="invalid English output"):
-                fixer.fix_grammar("I DRINK WATER")
-            mock_store.assert_not_called()
+            result = fixer.fix_grammar("I DRINK WATER")
+            assert result == "I drink water."
+            mock_store.assert_called_once_with("I DRINK WATER", "I drink water.")
 
     # --- Empty input ---
 
