@@ -323,6 +323,22 @@ export const cameraStyles = StyleSheet.create({
     gap: 12,
     marginBottom: 14,
   },
+  translationStatusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    flexWrap: 'wrap',
+  },
+  cardConnectionDot: {
+    width: 9,
+    height: 9,
+    borderRadius: 5,
+  },
+  cardConnectionText: {
+    color: '#64748b',
+    fontSize: 11,
+    fontWeight: '800',
+  },
   translationStatus: {
     color: '#17345f',
     fontSize: 16,

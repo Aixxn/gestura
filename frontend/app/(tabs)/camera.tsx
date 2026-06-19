@@ -1,4 +1,6 @@
-import { Camera, useCameraDevice, useCameraPermission } from 'react-native-vision-camera';
+import { Camera, useCameraDevice, useCameraPermission, type VideoFile } from 'react-native-vision-camera';
+import { Ionicons } from '@expo/vector-icons';
+import { useRouter } from 'expo-router';
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { Image, Text, TouchableOpacity, View} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -8,33 +10,54 @@ import * as Haptics from 'expo-haptics';
 import { useGesturaAPI } from '../../hooks/useGesturaAPI';
 import { useGesturaWebSocket } from '../../hooks/useGesturaWebSocket';
 import { getToken } from '../../services/token';
+import { addTranslationHistoryEntry } from '../../services/translationHistory';
+import { appendDetectedWord } from '../../utils/aslGlossPolicy';
+import { enqueueLiveFrame, type FrameQueueItem } from '../../utils/frameQueuePolicy';
 
-interface QueuedFrame {
-  id: string;
-  path: string;
-  timestamp: number;
-}
+type QueuedFrame = FrameQueueItem;
+
+const SNAPSHOT_QUALITY = 60;
+const CAPTURE_INTERVAL_MS = 100;
+const MAX_LIVE_QUEUE_SIZE = 80;
+const STOP_SETTLE_MS = 1800;
+const CONCURRENT_UPLOADS = 1;
+
+const wait = (durationMs: number) =>
+  new Promise((resolve) => {
+    setTimeout(resolve, durationMs);
+  });
 
 export default function CameraComponent() {
+  const router = useRouter();
   const { hasPermission, requestPermission } = useCameraPermission();
   const [isActive, setIsActive] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isFrontCamera, setIsFrontCamera] = useState(true);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [captureStatus, setCaptureStatus] = useState<string | null>(null);
+  const [liveAslGloss, setLiveAslGloss] = useState('');
   
   const device = useCameraDevice(isFrontCamera ? 'front' : 'back');
   const camera = useRef<Camera>(null);
   const frameCount = useRef(0);
   const captureIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const recordingPromiseRef = useRef<Promise<string | null> | null>(null);
+  const resolveRecordingRef = useRef<((path: string | null) => void) | null>(null);
+  const isRecordingVideoRef = useRef(false);
+  const pendingHistoryRef = useRef<{
+    aslGloss: string;
+    english: string | null;
+    videoPath: string | null;
+    saved: boolean;
+  } | null>(null);
   
-  // Frame queue system - max 80 frames
+  // Frame queue system. Live capture keeps a short ordered backlog so the
+  // segmentation service can observe motion boundaries without unbounded lag.
   const frameQueue = useRef<QueuedFrame[]>([]);
   const isProcessingQueue = useRef(false);
+  const isStopSettling = useRef(false);
   const isStopping = useRef(false);
   const [isTranslating, setIsTranslating] = useState(false);
-  const MAX_QUEUE_SIZE = 80;
-  const CONCURRENT_UPLOADS = 5; // Process 5 frames in parallel for better throughput
 
   // HTTP API integration (for sending frames)
   const { 
@@ -51,6 +74,7 @@ export default function CameraComponent() {
   // Connection is persistent - only connects when UUID is ready, stays connected throughout
   const {
     translation,
+    aslGloss: finalAslGloss,
     isConnected,
     isConnecting,
     error: wsError,
@@ -62,6 +86,80 @@ export default function CameraComponent() {
     reconnectInterval: 3000,
     maxReconnectAttempts: 5,
   });
+
+  const trySavePendingHistory = useCallback(() => {
+    const pending = pendingHistoryRef.current;
+    if (!pending || pending.saved || !pending.english || !pending.videoPath) {
+      return;
+    }
+
+    addTranslationHistoryEntry({
+      aslGloss: pending.aslGloss,
+      english: pending.english,
+      videoPath: pending.videoPath,
+    });
+    pending.saved = true;
+  }, []);
+
+  const startSessionRecording = useCallback(() => {
+    if (!camera.current || isRecordingVideoRef.current) {
+      return;
+    }
+
+    recordingPromiseRef.current = new Promise((resolve) => {
+      resolveRecordingRef.current = resolve;
+    });
+
+    try {
+      camera.current.startRecording({
+        fileType: 'mp4',
+        flash: 'off',
+        onRecordingFinished: (video: VideoFile) => {
+          isRecordingVideoRef.current = false;
+          resolveRecordingRef.current?.(video.path);
+          resolveRecordingRef.current = null;
+          console.log('Video recording saved:', video.path);
+        },
+        onRecordingError: (error) => {
+          isRecordingVideoRef.current = false;
+          resolveRecordingRef.current?.(null);
+          resolveRecordingRef.current = null;
+          console.error('Video recording error:', error);
+          setCameraError(error.message || 'Failed to record translation video.');
+        },
+      });
+      isRecordingVideoRef.current = true;
+    } catch (error) {
+      isRecordingVideoRef.current = false;
+      resolveRecordingRef.current?.(null);
+      resolveRecordingRef.current = null;
+      const message = error instanceof Error ? error.message : 'Failed to start video recording.';
+      console.error('Failed to start video recording:', error);
+      setCameraError(message);
+    }
+  }, []);
+
+  const stopSessionRecording = useCallback(async () => {
+    const recordingPromise = recordingPromiseRef.current;
+    if (!recordingPromise) {
+      return null;
+    }
+
+    if (isRecordingVideoRef.current && camera.current) {
+      try {
+        await camera.current.stopRecording();
+      } catch (error) {
+        console.error('Failed to stop video recording:', error);
+        resolveRecordingRef.current?.(null);
+        resolveRecordingRef.current = null;
+        isRecordingVideoRef.current = false;
+      }
+    }
+
+    const path = await recordingPromise;
+    recordingPromiseRef.current = null;
+    return path;
+  }, []);
 
   // Monitor WebSocket connection status
   useEffect(() => {
@@ -78,6 +176,14 @@ export default function CameraComponent() {
   useEffect(() => {
     if (translation) {
       console.log('Translation received:', translation);
+      if (pendingHistoryRef.current && !pendingHistoryRef.current.english) {
+        pendingHistoryRef.current.english = translation;
+        if (finalAslGloss) {
+          pendingHistoryRef.current.aslGloss = finalAslGloss;
+          setLiveAslGloss(finalAslGloss);
+        }
+        trySavePendingHistory();
+      }
       
       // Automatically speak new translation
       (async () => {
@@ -100,7 +206,7 @@ export default function CameraComponent() {
         }
       })();
     }
-  }, [translation]);
+  }, [translation, finalAslGloss, trySavePendingHistory]);
 
   // Provide haptic feedback for connection status changes
   useEffect(() => {
@@ -139,6 +245,7 @@ export default function CameraComponent() {
               console.error(`✗ Failed to send frame ${frame.id}:`, result.error);
               return { success: false, frameId: frame.id, error: result.error };
             }
+            setLiveAslGloss((currentGloss) => appendDetectedWord(currentGloss, result.data));
             console.log(`✓ Frame ${frame.id} sent successfully`);
             return { success: true, frameId: frame.id };
           } catch (error) {
@@ -162,23 +269,21 @@ export default function CameraComponent() {
       console.log('All queued frames sent. Stop process complete.');
       isStopping.current = false;
     }
-  }, [sendFrame, CONCURRENT_UPLOADS]);
+  }, [sendFrame]);
 
-  // Add frame to queue (max 80 frames)
+  // Add frame to queue. During live capture, stale unsent frames are dropped
+  // so backend work stays close to the user's current hand position.
   const addFrameToQueue = useCallback((frame: QueuedFrame) => {
-    // If queue is full, wait for it to have space
-    // Frame will still be added - backend will process when ready
-    if (frameQueue.current.length >= MAX_QUEUE_SIZE) {
-      console.log(`Queue at capacity (${MAX_QUEUE_SIZE}). Frame queued, will process when backend catches up.`);
-    }
-    
-    frameQueue.current.push(frame);
-    console.log(`Frame added to queue. Queue size: ${frameQueue.current.length}/${MAX_QUEUE_SIZE}`);
+    enqueueLiveFrame(frameQueue.current, frame, {
+      maxQueueSize: MAX_LIVE_QUEUE_SIZE,
+      preserveBacklog: isStopSettling.current || isStopping.current,
+    });
+    console.log(`Frame added to queue. Queue size: ${frameQueue.current.length}`);
     
     // Trigger queue processing
     processFrameQueue();
     return true; // Always indicate success
-  }, [processFrameQueue, MAX_QUEUE_SIZE]);
+  }, [processFrameQueue]);
 
   const onError = useCallback((error: any) => {
     console.error('Camera error:', error);
@@ -196,10 +301,10 @@ export default function CameraComponent() {
         if (!camera.current || isStopping.current || !sessionUUID) return;
 
         try {
-          // Take photo from camera
-          const photo = await camera.current.takePhoto({
-            flash: 'off',
-            enableShutterSound: false,
+          // Capture from the preview pipeline. This avoids the still-photo
+          // capture path, which is too slow for live frame transport.
+          const snapshot = await camera.current.takeSnapshot({
+            quality: SNAPSHOT_QUALITY,
           });
 
           const frameId = `frame_${frameCount.current}`;
@@ -209,10 +314,10 @@ export default function CameraComponent() {
           console.log(`Frame captured: ${frameId} - Total: ${frameCount.current}`);
 
           // Add frame to queue instead of sending directly
-          if (photo && sessionUUID) {
+          if (snapshot && sessionUUID) {
             const queuedFrame: QueuedFrame = {
               id: frameId,
-              path: photo.path,
+              path: snapshot.path,
               timestamp,
             };
             addFrameToQueue(queuedFrame);
@@ -221,7 +326,7 @@ export default function CameraComponent() {
           console.error('Failed to capture frame:', error);
           setCaptureStatus('Failed to capture frame');
         }
-      }, 500);
+      }, CAPTURE_INTERVAL_MS);
     } else {
       if (captureIntervalRef.current) {
         clearInterval(captureIntervalRef.current);
@@ -339,26 +444,45 @@ export default function CameraComponent() {
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
     }
     
-    setIsActive(newActiveState);
     console.log('Sign language detection active:', newActiveState);
     
     if (newActiveState) {
       // Starting detection
+      setIsActive(true);
+      setIsTranslating(false);
       isStopping.current = false;
+      isStopSettling.current = false;
       setCaptureStatus('Starting capture...');
       frameCount.current = 0;
       frameQueue.current = []; // Clear any existing queue
+      pendingHistoryRef.current = null;
+      setLiveAslGloss('');
       clearTranslation();
       clearSession();
+      startSessionRecording();
       
       console.log(`WebSocket will connect with UUID: ${sessionUUID}`);
       console.log('Started capturing and sending frames...');
     } else {
-      // Stopping detection - process remaining frames in queue
+      // Stopping detection - keep a short final capture window so the backend
+      // receives the stillness/end frames needed to close the last sign.
       console.log(`Stopping capture. Processing ${frameQueue.current.length} remaining frames in queue...`);
-      isStopping.current = true;
       setIsTranslating(true);
+      isStopSettling.current = true;
+      setCaptureStatus('Finishing capture...');
+      pendingHistoryRef.current = {
+        aslGloss: liveAslGloss,
+        english: null,
+        videoPath: null,
+        saved: false,
+      };
+
+      await wait(STOP_SETTLE_MS);
+      isStopSettling.current = false;
+      isStopping.current = true;
+      setIsActive(false);
       setCaptureStatus('Stopping capture...');
+      processFrameQueue();
       
       // Wait for queue to be fully processed
       const checkQueueEmpty = setInterval(async () => {
@@ -367,7 +491,14 @@ export default function CameraComponent() {
           console.log(`All frames processed. Total frames captured: ${frameCount.current}`);
           
           // Now stop the backend processing
-          const result = await stopProcessing();
+          const [result, videoPath] = await Promise.all([
+            stopProcessing(),
+            stopSessionRecording(),
+          ]);
+          if (pendingHistoryRef.current) {
+            pendingHistoryRef.current.videoPath = videoPath;
+            trySavePendingHistory();
+          }
           setIsTranslating(false);
           if (result.success) {
             setCaptureStatus(null);
@@ -385,8 +516,10 @@ export default function CameraComponent() {
     }
   };
 
+  const displayText = translation || liveAslGloss;
+
   const handleTextToSpeech = async () => {
-    const textToSpeak = translation || 'Your Translation will appear here';
+    const textToSpeak = displayText || 'Your Translation will appear here';
     
     if (isPlaying) {
       // Stop speaking if already playing
@@ -418,20 +551,26 @@ export default function CameraComponent() {
     console.log('Translate functionality');
   };
 
-  const isFinishingSession = captureStatus === 'Stopping capture...' || captureStatus === 'Finalizing translation...';
+  const handleProfilePress = () => {
+    router.push('/(tabs)/settings' as never);
+  };
+
+  const isFinishingSession = captureStatus === 'Finishing capture...' || captureStatus === 'Stopping capture...' || captureStatus === 'Finalizing translation...';
   const connectionLabel = isConnected ? 'Connected' : isConnecting ? 'Connecting' : 'Offline';
   const sessionStatus = isFinishingSession
     ? 'Processing...'
     : isActive
       ? 'Listening...'
-      : translation
+      : displayText
         ? 'Translation ready'
         : 'Ready to translate';
   const sessionHint = isActive
-    ? 'Keep signing clearly inside the guide'
+    ? liveAslGloss || translation
+      ? 'Showing raw ASL gloss'
+      : 'Keep signing clearly in view'
     : translation
       ? 'Tap Start to translate again'
-      : 'Place your hands inside the frame';
+      : 'Place your hands in view';
   const actionLabel = isFinishingSession ? 'Finishing...' : isActive ? 'Stop' : 'Start';
   const actionAccessibilityLabel = isActive ? 'Stop translation' : 'Start translation';
 
@@ -444,20 +583,17 @@ export default function CameraComponent() {
             <Text style={cameraStyles.subtitleText}>Live sign translator</Text>
           </View>
           <View style={cameraStyles.topActions}>
-            <View
-              style={[
-                cameraStyles.connectionPill,
-                isConnected ? cameraStyles.connectionPillConnected : cameraStyles.connectionPillOffline,
-              ]}
-            >
-              <View
-                style={[
-                  cameraStyles.connectionDot,
-                  isConnected ? cameraStyles.connectionDotConnected : cameraStyles.connectionDotOffline,
-                ]}
-              />
-              <Text style={cameraStyles.connectionText}>{connectionLabel}</Text>
-            </View>
+          <TouchableOpacity
+            style={cameraStyles.cameraFlipButton}
+            onPress={handleProfilePress}
+            accessible={true}
+            accessibilityRole="button"
+            accessibilityLabel="Open profile and settings"
+            accessibilityHint="Activates to open account settings and translation history"
+            hitSlop={{ top: 15, bottom: 15, left: 15, right: 15 }}
+          >
+            <Ionicons name="person" size={21} color="#fff" />
+          </TouchableOpacity>
           <TouchableOpacity 
             style={cameraStyles.cameraFlipButton} 
             onPress={() => {
@@ -486,24 +622,10 @@ export default function CameraComponent() {
           device={device}
           isActive={true}
           video={true}
-          photo={true}
+          photo={false}
           audio={false}
           onError={onError}
         />
-
-        <View pointerEvents="none" style={cameraStyles.previewOverlay}>
-          <View style={cameraStyles.handGuide}>
-            <View style={[cameraStyles.guideCorner, cameraStyles.guideCornerTopLeft]} />
-            <View style={[cameraStyles.guideCorner, cameraStyles.guideCornerTopRight]} />
-            <View style={[cameraStyles.guideCorner, cameraStyles.guideCornerBottomLeft]} />
-            <View style={[cameraStyles.guideCorner, cameraStyles.guideCornerBottomRight]} />
-            {!isActive && (
-              <View style={cameraStyles.guideHint}>
-                <Text style={cameraStyles.guideHintText}>Place your hands inside the frame</Text>
-              </View>
-            )}
-          </View>
-        </View>
 
         <View 
           style={cameraStyles.translationContainer}
@@ -513,7 +635,16 @@ export default function CameraComponent() {
         >
           <View style={cameraStyles.translationHeader}>
             <View>
-              <Text style={cameraStyles.translationStatus}>{sessionStatus}</Text>
+              <View style={cameraStyles.translationStatusRow}>
+                <View
+                  style={[
+                    cameraStyles.cardConnectionDot,
+                    isConnected ? cameraStyles.connectionDotConnected : cameraStyles.connectionDotOffline,
+                  ]}
+                />
+                <Text style={cameraStyles.translationStatus}>{sessionStatus}</Text>
+                <Text style={cameraStyles.cardConnectionText}>{connectionLabel}</Text>
+              </View>
               <Text style={cameraStyles.translationHint}>{sessionHint}</Text>
             </View>
             {(captureStatus || apiError || wsError || isSending) && (
@@ -532,15 +663,15 @@ export default function CameraComponent() {
             style={cameraStyles.translationContent}
             accessible={true}
             accessibilityLiveRegion="assertive"
-            accessibilityLabel={translation || "Waiting for translation"}
+            accessibilityLabel={displayText || "Waiting for translation"}
           >
-            {translation ? (
+            {displayText ? (
               <Text 
                 style={cameraStyles.translationText}
                 accessible={true}
                 accessibilityRole="text"
               >
-                {translation}
+                {displayText}
               </Text>
             ) : isTranslating ? (
               <Text 

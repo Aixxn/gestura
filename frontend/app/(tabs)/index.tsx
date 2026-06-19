@@ -38,7 +38,7 @@ const Gestura = () => {
       case 3:
         return {
           title: "Welcome to Gestura",
-          subtitle: "Thank you for trying Gestura. We hope it enhances your communication experience.",
+          subtitle: "Thank you for trying Gestura.\nWe hope it enhances your communication experience.",
           buttonText: "Start Using Gestura",
           backgroundImage: require('../../images/background3.png'),
           activeDot: 3

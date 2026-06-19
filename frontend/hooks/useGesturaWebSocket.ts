@@ -108,11 +108,11 @@ export const useGesturaWebSocket = ({
             return;
           }
 
-          setTranslation(String(english));
-
           if (parsed?.asl_gloss) {
             setAslGloss(String(parsed.asl_gloss));
           }
+
+          setTranslation(String(english));
         } catch (err) {
           console.error('WebSocket: Failed to parse incoming message:', err, event.data);
         }

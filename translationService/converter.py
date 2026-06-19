@@ -15,6 +15,8 @@ PERSIST_WINDOW = int(os.getenv("PERSIST_WINDOW", "5"))
 # ``still_frames_required`` (default 8) so a natural sign-ending stillness
 # triggers the boundary *before* the idle gate resets the pipeline.
 IDLE_THRESHOLD = int(os.getenv("IDLE_THRESHOLD", "15"))
+DETECTION_WIDTH = int(os.getenv("DETECTION_WIDTH", "640"))
+DETECTION_HEIGHT = int(os.getenv("DETECTION_HEIGHT", "480"))
 
 _LH_DIM = 21 * 3      # 63
 _RH_DIM = 21 * 3      # 63
@@ -67,6 +69,30 @@ def _ensure_model() -> str:
     urllib.request.urlretrieve(_MODEL_URL, _MODEL_PATH)
     print(f"[Converter] Model saved to {_MODEL_PATH}")
     return _MODEL_PATH
+
+
+def _prepare_image_for_detection(cv_image: np.ndarray) -> np.ndarray:
+    """Return a fixed-size BGR image for MediaPipe detection.
+
+    MediaPipe's holistic graph keeps internal segmentation smoothing state.
+    Preview snapshots can arrive with changing dimensions, which makes that
+    smoothing calculator fail. Letterboxing keeps dimensions stable without
+    distorting the signer.
+    """
+    src_h, src_w = cv_image.shape[:2]
+    if src_h <= 0 or src_w <= 0:
+        raise ValueError("Cannot process an empty image.")
+
+    scale = min(DETECTION_WIDTH / src_w, DETECTION_HEIGHT / src_h)
+    resized_w = max(1, int(round(src_w * scale)))
+    resized_h = max(1, int(round(src_h * scale)))
+
+    resized = cv.resize(cv_image, (resized_w, resized_h), interpolation=cv.INTER_AREA)
+    canvas = np.zeros((DETECTION_HEIGHT, DETECTION_WIDTH, 3), dtype=cv_image.dtype)
+    x = (DETECTION_WIDTH - resized_w) // 2
+    y = (DETECTION_HEIGHT - resized_h) // 2
+    canvas[y:y + resized_h, x:x + resized_w] = resized
+    return canvas
 
 
 class Converter:
@@ -149,6 +175,7 @@ class Converter:
         if cv_image is None:
             raise ValueError("Could not decode image bytes (corrupt data).")
 
+        cv_image = _prepare_image_for_detection(cv_image)
         image_rgb = cv.cvtColor(cv_image, cv.COLOR_BGR2RGB)
         # Ensure contiguous memory layout — mp.Image can choke on
         # non-contiguous views returned by cv.cvtColor.
@@ -173,6 +200,7 @@ class Converter:
         Same result as :meth:`point_detection` but avoids the encode-decode
         round trip.  Useful for offline data extraction from video files.
         """
+        cv_image = _prepare_image_for_detection(cv_image)
         image_rgb = cv.cvtColor(cv_image, cv.COLOR_BGR2RGB)
         # Ensure contiguous memory layout — mp.Image can choke on
         # non-contiguous views returned by cv.cvtColor.

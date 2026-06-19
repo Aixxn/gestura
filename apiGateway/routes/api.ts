@@ -52,6 +52,7 @@ wss.on('connection', async (ws, req) => {
 
 // endpoints
 translationRouter.get('/stop/:uuid', requireAuth, async (req: AuthRequest, res) => {
+  const gatewayStopReceivedAt = Date.now();
   const uuid = req.params.uuid;
   const ws = sessionMap.get(uuid);
 
@@ -67,22 +68,40 @@ translationRouter.get('/stop/:uuid', requireAuth, async (req: AuthRequest, res) 
   }
 
   try {
+    const translationStopStartedAt = Date.now();
     const response = await axios.post(
       `${TRANSLATION_SERVICE_URL}/stop`,
       { uuid },
       { timeout: 15000 }
     );
+    const translationStopFinishedAt = Date.now();
+    const responseData: Record<string, any> = response.data && typeof response.data === 'object'
+      ? response.data
+      : {};
+    const timing = {
+      ...(responseData.timing || {}),
+      gateway_stop_received_at_ms: gatewayStopReceivedAt,
+      gateway_stop_translation_roundtrip_ms: translationStopFinishedAt - translationStopStartedAt,
+      gateway_stop_total_ms: Date.now() - gatewayStopReceivedAt,
+      gateway_ws_send_at_ms: Date.now(),
+    };
 
     const result = {
       type: 'translation',
-      asl_gloss: response.data.asl_gloss || '',
-      english: response.data.english || '',
-      words: response.data.words || [],
+      asl_gloss: responseData.asl_gloss || '',
+      english: responseData.english || '',
+      words: responseData.words || [],
+      timing,
     };
 
     if (ws.readyState === ws.OPEN) {
       ws.send(JSON.stringify(result));
     }
+
+    console.log('[LATENCY] /api/stop timing:', {
+      uuid,
+      ...timing,
+    });
 
     res.status(200).send('Successfully finished sequence.');
   } catch (e) {
@@ -92,6 +111,7 @@ translationRouter.get('/stop/:uuid', requireAuth, async (req: AuthRequest, res) 
 });
 
 translationRouter.post('/convert', requireAuth, upload.single('rawImage'), async (req: AuthRequest, res) => {
+  const gatewayReceivedAt = Date.now();
   const file = req.file
   const uuid = req.body.uuid
 
@@ -108,18 +128,41 @@ translationRouter.post('/convert', requireAuth, upload.single('rawImage'), async
 
   try {
     const imageBase64 = file.buffer.toString('base64');
+    const translationRequestStartedAt = Date.now();
 
     const response = await axios.post(
       `${TRANSLATION_SERVICE_URL}/process-frame`,
       {
         uuid: uuid,
         image_bytes: imageBase64,
-        timestamp_ms: Date.now()
+        timestamp_ms: gatewayReceivedAt
       },
       { timeout: 5000 }
     );
+    const translationResponseReceivedAt = Date.now();
+    const responseData: Record<string, any> = response.data && typeof response.data === 'object'
+      ? response.data
+      : {};
+    const timing = {
+      ...(responseData.timing || {}),
+      gateway_received_at_ms: gatewayReceivedAt,
+      gateway_translation_request_started_at_ms: translationRequestStartedAt,
+      gateway_translation_response_received_at_ms: translationResponseReceivedAt,
+      gateway_translation_roundtrip_ms: translationResponseReceivedAt - translationRequestStartedAt,
+      gateway_total_ms: Date.now() - gatewayReceivedAt,
+      upload_bytes: file.size,
+    };
 
-    res.status(200).send(response.data);
+    console.log('[LATENCY] /api/convert timing:', {
+      uuid,
+      status: responseData.status,
+      ...timing,
+    });
+
+    res.status(200).send({
+      ...responseData,
+      timing,
+    });
   } catch (e) {
     console.error('Error failed to send data to translation service:', e)
     res.status(500).send({ message: 'Failed to process image. ' })
