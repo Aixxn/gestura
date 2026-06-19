@@ -10,8 +10,8 @@ interface EnvironmentConfig {
 }
 
 const DEVELOPMENT_CONFIG: EnvironmentConfig = {
-  API_URL: 'http://192.168.100.5:8080', // Your local Docker IP
-  WS_URL: 'ws://192.168.100.5:9898',  
+  API_URL: 'https://archlinux.tailabd581.ts.net',
+  WS_URL: 'wss://archlinux.tailabd581.ts.net/ws',
   isDevelopment: true,
 };
 

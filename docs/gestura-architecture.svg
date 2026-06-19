@@ -1,0 +1,213 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 1130" width="1440" height="1130">
+  <defs>
+    <!-- Arrowhead marker -->
+    <marker id="arrow" markerWidth="12" markerHeight="8" refX="12" refY="4" orient="auto">
+      <path d="M 0 0 L 12 4 L 0 8 Z" fill="#555"/>
+    </marker>
+
+    <style>
+      /* Background */
+      .bg { fill: #ffffff; }
+
+      /* Box styles */
+      .box        { fill: #ffffff; stroke: #333333; stroke-width: 2; }
+      .box-sub    { fill: #f8f9fc; stroke: #555555; stroke-width: 1.5; }
+      .box-inner  { fill: #ffffff; stroke: #777777; stroke-width: 1.5; }
+      .docker     { fill: none;    stroke: #999999; stroke-width: 2; stroke-dasharray: 8,6; }
+
+      /* Text styles */
+      .t-main   { font: bold 34px Arial,Helvetica,sans-serif; fill: #1a1a1a; text-anchor: middle; dominant-baseline: central; }
+      .t-sub    { font: 22px Arial,Helvetica,sans-serif; fill: #444444; text-anchor: middle; dominant-baseline: central; }
+      .t-sub2   { font: 18px Arial,Helvetica,sans-serif; fill: #555555; text-anchor: middle; dominant-baseline: central; }
+      .t-small  { font: bold 24px Arial,Helvetica,sans-serif; fill: #1a1a1a; text-anchor: middle; dominant-baseline: central; }
+      .t-inner  { font: bold 20px Arial,Helvetica,sans-serif; fill: #222222; text-anchor: middle; dominant-baseline: central; }
+      .t-label  { font: 18px Arial,Helvetica,sans-serif; fill: #555555; text-anchor: middle; dominant-baseline: central; }
+      .t-detail { font: italic 13px Arial,Helvetica,sans-serif; fill: #666666; text-anchor: middle; dominant-baseline: central; }
+
+      /* Badges */
+      .badge     { fill: #eef1f7; stroke: #bbbbbb; stroke-width: 1; }
+      .badge-txt { font: bold 14px Arial,Helvetica,sans-serif; fill: #333333; text-anchor: middle; dominant-baseline: central; }
+      .badge-txt-sm { font: bold 13px Arial,Helvetica,sans-serif; fill: #333333; text-anchor: middle; dominant-baseline: central; }
+
+      /* Arrows */
+      .arrow { fill: none; stroke: #555555; stroke-width: 2.5; marker-end: url(#arrow); }
+
+      /* Docker label */
+      .docker-lbl { font: bold 24px Arial,Helvetica,sans-serif; fill: #777777; }
+
+      /* Legend */
+      .leg-title { font: bold 20px Arial,Helvetica,sans-serif; fill: #1a1a1a; }
+      .leg-text  { font: 17px Arial,Helvetica,sans-serif; fill: #333333; dominant-baseline: central; }
+    </style>
+  </defs>
+
+  <!-- ===== BACKGROUND ===== -->
+  <rect class="bg" width="1440" height="1130"/>
+
+  <!-- ===== DOCKER COMPOSE BOUNDARY ===== -->
+  <rect class="docker" x="450" y="70" width="940" height="960" rx="8"/>
+  <text class="docker-lbl" x="465" y="98">Docker Compose Environment</text>
+
+  <!-- ===== COMPONENT BOXES (drawn before arrows for clean fills) ===== -->
+
+  <!-- ── Frontend ── -->
+  <rect class="box" x="70" y="180" width="320" height="170" rx="6"/>
+  <text class="t-main" x="230" y="218">Frontend</text>
+  <text class="t-sub" x="230" y="256">Expo React Native</text>
+  <!-- Badges -->
+  <g transform="translate(106, 283)">
+    <rect class="badge" width="68" height="24" rx="5"/>
+    <text class="badge-txt" x="34" y="12">Expo 54</text>
+  </g>
+  <g transform="translate(184, 283)">
+    <rect class="badge" width="90" height="24" rx="5"/>
+    <text class="badge-txt" x="45" y="12">React 19.1</text>
+  </g>
+  <g transform="translate(284, 283)">
+    <rect class="badge" width="78" height="24" rx="5"/>
+    <text class="badge-txt" x="39" y="12">RN 0.81</text>
+  </g>
+
+  <!-- ── API Gateway ── -->
+  <rect class="box" x="490" y="140" width="360" height="170" rx="6"/>
+  <text class="t-main" x="670" y="178">API Gateway</text>
+  <text class="t-sub" x="670" y="216">Express.js + TypeScript</text>
+  <!-- Badges -->
+  <g transform="translate(536, 243)">
+    <rect class="badge" width="88" height="24" rx="5"/>
+    <text class="badge-txt" x="44" y="12">REST :8080</text>
+  </g>
+  <g transform="translate(634, 243)">
+    <rect class="badge" width="82" height="24" rx="5"/>
+    <text class="badge-txt" x="41" y="12">WS :9898</text>
+  </g>
+  <g transform="translate(726, 243)">
+    <rect class="badge" width="80" height="24" rx="5"/>
+    <text class="badge-txt" x="40" y="12">JWT Auth</text>
+  </g>
+
+  <!-- ── MongoDB ── -->
+  <rect class="box" x="490" y="370" width="360" height="150" rx="6"/>
+  <text class="t-main" x="670" y="408">MongoDB</text>
+  <text class="t-sub" x="670" y="442">User Data Store</text>
+  <!-- Badges -->
+  <g transform="translate(618, 472)">
+    <rect class="badge" width="104" height="22" rx="5"/>
+    <text class="badge-txt-sm" x="52" y="11">Port :27017</text>
+  </g>
+
+  <!-- ── Translation Service ── -->
+  <rect class="box" x="900" y="140" width="460" height="480" rx="6"/>
+  <text class="t-main" x="1130" y="178">Translation Service</text>
+  <text class="t-sub" x="1130" y="216">FastAPI + Python :7860</text>
+  <!-- Badges -->
+  <g transform="translate(1001, 243)">
+    <rect class="badge" width="84" height="24" rx="5"/>
+    <text class="badge-txt" x="42" y="12">MediaPipe</text>
+  </g>
+  <g transform="translate(1095, 243)">
+    <rect class="badge" width="90" height="24" rx="5"/>
+    <text class="badge-txt" x="45" y="12">TensorFlow</text>
+  </g>
+  <g transform="translate(1195, 243)">
+    <rect class="badge" width="64" height="24" rx="5"/>
+    <text class="badge-txt" x="32" y="12">FLAN-T5</text>
+  </g>
+
+  <!-- ── Grammar Correction Engine (sub-box inside Translation Service) ── -->
+  <rect class="box-sub" x="920" y="280" width="420" height="320" rx="6"/>
+  <text class="t-small" x="1130" y="310">Grammar Correction Engine</text>
+  <text class="t-label" x="1130" y="338">Grammar Refinement &amp; Caching</text>
+
+  <!-- FLAN-T5 sub-sub-box -->
+  <rect class="box-inner" x="935" y="360" width="195" height="220" rx="5"/>
+  <text class="t-inner" x="1032.5" y="390">FLAN-T5</text>
+  <text class="t-label" x="1032.5" y="422">Fine-tuned Model</text>
+  <text class="t-detail" x="1032.5" y="468">google/flan-t5-small</text>
+
+  <!-- SemanticCache sub-sub-box -->
+  <rect class="box-inner" x="1130" y="360" width="195" height="220" rx="5"/>
+  <text class="t-inner" x="1227.5" y="390">SemanticCache</text>
+  <text class="t-label" x="1227.5" y="422">Cosine Similarity</text>
+  <text class="t-detail" x="1227.5" y="468">all-MiniLM-L6-v2</text>
+
+  <!-- ── ML Model ── -->
+  <rect class="box" x="490" y="810" width="870" height="160" rx="6"/>
+  <text class="t-main" x="925" y="848">ML Model</text>
+  <text class="t-sub" x="925" y="886">Keras / TensorFlow</text>
+  <!-- Badges -->
+  <g transform="translate(812, 916)">
+    <rect class="badge" width="60" height="24" rx="5"/>
+    <text class="badge-txt" x="30" y="12">BiLSTM</text>
+  </g>
+  <g transform="translate(882, 916)">
+    <rect class="badge" width="78" height="24" rx="5"/>
+    <text class="badge-txt" x="39" y="12">Attention</text>
+  </g>
+  <g transform="translate(970, 916)">
+    <rect class="badge" width="68" height="24" rx="5"/>
+    <text class="badge-txt" x="34" y="12">30-class</text>
+  </g>
+
+  <!-- ── Dev Scripts ── -->
+  <rect class="box" x="90" y="560" width="300" height="150" rx="6"/>
+  <text class="t-main" x="240" y="595">Dev Scripts</text>
+  <text class="t-sub2" x="240" y="631">segmentation_tester.py</text>
+  <text class="t-sub2" x="240" y="655">test_pipeline.py</text>
+  <!-- Badges -->
+  <g transform="translate(172, 688)">
+    <rect class="badge" width="62" height="22" rx="5"/>
+    <text class="badge-txt-sm" x="31" y="11">Python</text>
+  </g>
+  <g transform="translate(244, 688)">
+    <rect class="badge" width="66" height="22" rx="5"/>
+    <text class="badge-txt-sm" x="33" y="11">OpenCV</text>
+  </g>
+
+  <!-- ===== ARROWS (drawn on top — no text labels) ===== -->
+
+  <!-- 1. Frontend → API Gateway -->
+  <path class="arrow" d="M 393,265 L 437,265 L 437,225 L 490,225"/>
+
+  <!-- 2. API Gateway → Translation Service -->
+  <path class="arrow" d="M 853,225 L 900,225"/>
+
+  <!-- 3. API Gateway → MongoDB -->
+  <path class="arrow" d="M 670,313 L 670,370"/>
+
+  <!-- 4. Translation Service → ML Model -->
+  <path class="arrow" d="M 1130,623 L 1130,800 L 925,800 L 925,810"/>
+
+  <!-- 5. Dev Scripts → Translation Service -->
+  <path class="arrow" d="M 393,640 L 1130,640 L 1130,620"/>
+
+  <!-- ===== LEGEND ===== -->
+  <rect class="box" x="70" y="1050" width="1300" height="60" rx="6"/>
+  <text class="leg-title" x="90" y="1082">Legend:</text>
+
+  <!-- Arrow -->
+  <path class="arrow" d="M 210,1082 L 260,1082"/>
+  <text class="leg-text" x="275" y="1082">Data Flow Direction</text>
+
+  <!-- Separator -->
+  <line x1="470" y1="1068" x2="470" y2="1092" stroke="#cccccc" stroke-width="1.5"/>
+
+  <!-- Dashed line -->
+  <line x1="490" y1="1082" x2="535" y2="1082" stroke="#888888" stroke-width="2.5" stroke-dasharray="7,5"/>
+  <text class="leg-text" x="550" y="1082">Docker Boundary</text>
+
+  <!-- Separator -->
+  <line x1="750" y1="1068" x2="750" y2="1092" stroke="#cccccc" stroke-width="1.5"/>
+
+  <!-- Box sample -->
+  <rect x="770" y="1070" width="24" height="24" fill="#ffffff" stroke="#333333" stroke-width="2" rx="3"/>
+  <text class="leg-text" x="805" y="1082">Service Component</text>
+
+  <!-- Separator -->
+  <line x1="1010" y1="1068" x2="1010" y2="1092" stroke="#cccccc" stroke-width="1.5"/>
+
+  <!-- Badge sample -->
+  <rect x="1030" y="1070" width="24" height="24" fill="#eef1f7" stroke="#bbbbbb" rx="4"/>
+  <text class="leg-text" x="1065" y="1082">Tech Stack Badge</text>
+
+</svg>

@@ -16,6 +16,7 @@
 **/.env
 **/.ipynb_checkpoints/
 **/*.keras
+translationService/models/
 **/keypoint_data_*/
 
 

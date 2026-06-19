@@ -1,5 +1,5 @@
 """
-Tests for the Gesture Translation Service (merged segmentation + ML + Groq).
+Tests for the Gesture Translation Service (merged segmentation + ML + FLAN-T5).
 
 Run with: pytest test_main.py -v
 """
@@ -23,8 +23,6 @@ keras.models.load_model = lambda path: None
 # Mock the ``converter`` module BEFORE importing ``main``
 # ---------------------------------------------------------------------------
 
-DEFAULT_WINDOW = np.zeros((35, 258), dtype=np.float32)
-
 _mock_converter_module = types.ModuleType("converter")
 _mock_converter_module.FEATURE_DIM = 258
 _mock_converter_module.WINDOW_SIZE = 35
@@ -32,25 +30,24 @@ _mock_converter_module.WINDOW_SIZE = 35
 
 class _MockConverter:
     def __init__(self):
-        self.window = DEFAULT_WINDOW.copy()
-        self.current_length = 0
+        self._lh_lost_counter = 0
+        self._rh_lost_counter = 0
+
+    @property
+    def is_idle(self) -> bool:
+        """Mirrors the real Converter.is_idle: both hands absent for >= IDLE_THRESHOLD (15) frames."""
+        return False  # default to not idle so tests reach the motion detector
 
     def point_detection(self, image_bytes: bytes) -> np.ndarray:
         return np.zeros(258, dtype=np.float32)
 
-    def process_new_frame(self, frame_vector: np.ndarray) -> np.ndarray:
-        if self.current_length < 35:
-            self.window[self.current_length] = frame_vector
-            self.current_length += 1
-        else:
-            self.window[:-1] = self.window[1:]
-            self.window[-1] = frame_vector
-        return self.window
-
-    def stop(self) -> np.ndarray:
-        return self.window
-
     def get_persisted_keypoints(self) -> np.ndarray:
+        return np.zeros(258, dtype=np.float32)
+
+    def get_raw_keypoints(self) -> np.ndarray:
+        return np.zeros(258, dtype=np.float32)
+
+    def _build_unified_kp(self) -> np.ndarray:
         return np.zeros(258, dtype=np.float32)
 
 
@@ -69,8 +66,6 @@ client = TestClient(svc.app)
 def reset_state():
     svc.session_states.clear()
     svc.motion_detector.reset()
-    svc.converter.window = DEFAULT_WINDOW.copy()
-    svc.converter.current_length = 0
     yield
 
 
@@ -126,28 +121,214 @@ class TestNormalizeFrames:
 # ===================================================================
 
 class TestASLGrammarFixer:
-    @patch('main.Groq')
-    def test_init_with_api_key(self, mock_groq):
-        fixer = svc.ASLGrammarFixer(api_key="test_key")
-        mock_groq.assert_called_once_with(api_key="test_key")
-
-    @patch.dict(os.environ, {'GROQ_API_KEY': 'env_key'})
-    @patch('main.Groq')
-    def test_init_with_env_var(self, mock_groq):
+    def test_init_uses_flan_t5_default(self):
         fixer = svc.ASLGrammarFixer()
-        mock_groq.assert_called_once_with(api_key="env_key")
+        assert fixer.model_name in {"google/flan-t5-small", "models/flan-t5-asl-mini"}
 
-    @patch('main.Groq')
-    def test_fix_grammar_success(self, mock_groq):
-        mock_client = Mock()
-        mock_response = Mock()
-        mock_response.choices = [Mock()]
-        mock_response.choices[0].message.content = "I am hungry."
-        mock_client.chat.completions.create.return_value = mock_response
-        mock_groq.return_value = mock_client
-        fixer = svc.ASLGrammarFixer(api_key="test_key")
+    def test_init_uses_model_name_from_env(self, monkeypatch):
+        monkeypatch.setenv("FLAN_T5_MODEL", "google/flan-t5-base")
+        fixer = svc.ASLGrammarFixer()
+        assert fixer.model_name == "google/flan-t5-base"
+
+    def test_fix_grammar_success(self, monkeypatch):
+        class FakeInputs(dict):
+            def to(self, _device):
+                return self
+
+        class FakeTokenizer:
+            def __call__(self, prompt, **kwargs):
+                assert "translate ASL gloss to English:" in prompt
+                assert "ME HUNGRY" in prompt
+                assert kwargs["return_tensors"] == "pt"
+                return FakeInputs({"input_ids": [1]})
+
+            def decode(self, output_ids, skip_special_tokens=True):
+                assert skip_special_tokens is True
+                assert output_ids == [101]
+                return '"I am hungry."'
+
+        class FakeModel:
+            device = "cpu"
+
+            def generate(self, **kwargs):
+                assert kwargs["input_ids"] == [1]
+                assert kwargs["max_new_tokens"] == 100
+                return [[101]]
+
+        fixer = svc.ASLGrammarFixer()
+        monkeypatch.setattr(
+            fixer,
+            "_load_model",
+            lambda: (FakeTokenizer(), FakeModel()),
+        )
         result = fixer.fix_grammar("ME HUNGRY")
         assert result == "I am hungry."
+
+    def test_fix_grammar_falls_back_for_echoed_simple_sentence(self, monkeypatch):
+        class FakeInputs(dict):
+            def to(self, _device):
+                return self
+
+        class FakeTokenizer:
+            def __call__(self, *_args, **_kwargs):
+                return FakeInputs({"input_ids": [1]})
+
+            def decode(self, *_args, **_kwargs):
+                return "I DRINK WATER"
+
+        class FakeModel:
+            device = "cpu"
+
+            def generate(self, **_kwargs):
+                return [[101]]
+
+        fixer = svc.ASLGrammarFixer()
+        monkeypatch.setattr(
+            fixer,
+            "_load_model",
+            lambda: (FakeTokenizer(), FakeModel()),
+        )
+
+        assert fixer.fix_grammar("I DRINK WATER") == "I drink water."
+
+    def test_fix_grammar_falls_back_for_echoed_asl_gloss(self, monkeypatch):
+        class FakeInputs(dict):
+            def to(self, _device):
+                return self
+
+        class FakeTokenizer:
+            def __call__(self, *_args, **_kwargs):
+                return FakeInputs({"input_ids": [1]})
+
+            def decode(self, *_args, **_kwargs):
+                return "ME EAT APPLE"
+
+        class FakeModel:
+            device = "cpu"
+
+            def generate(self, **_kwargs):
+                return [[101]]
+
+        fixer = svc.ASLGrammarFixer()
+        monkeypatch.setattr(
+            fixer,
+            "_load_model",
+            lambda: (FakeTokenizer(), FakeModel()),
+        )
+
+        assert fixer.fix_grammar("ME EAT APPLE") == "I eat an apple."
+
+    def test_fix_grammar_accepts_model_structured_sentence(self, monkeypatch):
+        class FakeInputs(dict):
+            def to(self, _device):
+                return self
+
+        class FakeTokenizer:
+            def __call__(self, *_args, **_kwargs):
+                return FakeInputs({"input_ids": [1]})
+
+            def decode(self, *_args, **_kwargs):
+                return "I eat an apple."
+
+        class FakeModel:
+            device = "cpu"
+
+            def generate(self, **_kwargs):
+                return [[101]]
+
+        fixer = svc.ASLGrammarFixer()
+        monkeypatch.setattr(
+            fixer,
+            "_load_model",
+            lambda: (FakeTokenizer(), FakeModel()),
+        )
+
+        assert fixer.fix_grammar("I EAT APPLE") == "I eat an apple."
+
+    def test_fix_grammar_cleans_repeated_gloss_before_model(self, monkeypatch):
+        class FakeInputs(dict):
+            def to(self, _device):
+                return self
+
+        class FakeTokenizer:
+            def __call__(self, prompt, **_kwargs):
+                assert "PLEASE DRINK HOME MILK" in prompt
+                assert "PLEASE PLEASE" not in prompt
+                assert "MILK MILK" not in prompt
+                return FakeInputs({"input_ids": [1]})
+
+            def decode(self, *_args, **_kwargs):
+                return "Please drink milk at home."
+
+        class FakeModel:
+            device = "cpu"
+
+            def generate(self, **_kwargs):
+                return [[101]]
+
+        fixer = svc.ASLGrammarFixer()
+        monkeypatch.setattr(
+            fixer,
+            "_load_model",
+            lambda: (FakeTokenizer(), FakeModel()),
+        )
+
+        result = fixer.fix_grammar("PLEASE PLEASE DRINK HOME MILK MILK")
+        assert result == "Please drink milk at home."
+
+    def test_fix_grammar_falls_back_for_gloss_like_model_output(self, monkeypatch):
+        class FakeInputs(dict):
+            def to(self, _device):
+                return self
+
+        class FakeTokenizer:
+            def __call__(self, *_args, **_kwargs):
+                return FakeInputs({"input_ids": [1]})
+
+            def decode(self, *_args, **_kwargs):
+                return "PLEASE DRINK HOME MILK"
+
+        class FakeModel:
+            device = "cpu"
+
+            def generate(self, **_kwargs):
+                return [[101]]
+
+        fixer = svc.ASLGrammarFixer()
+        monkeypatch.setattr(
+            fixer,
+            "_load_model",
+            lambda: (FakeTokenizer(), FakeModel()),
+        )
+
+        assert fixer.fix_grammar("PLEASE PLEASE DRINK HOME MILK MILK") == "Please drink milk at home."
+
+    def test_fix_grammar_falls_back_for_prompt_artifact(self, monkeypatch):
+        class FakeInputs(dict):
+            def to(self, _device):
+                return self
+
+        class FakeTokenizer:
+            def __call__(self, *_args, **_kwargs):
+                return FakeInputs({"input_ids": [1]})
+
+            def decode(self, *_args, **_kwargs):
+                return "ASL gloss: I DRINK WATER Structured English: I drink water."
+
+        class FakeModel:
+            device = "cpu"
+
+            def generate(self, **_kwargs):
+                return [[101]]
+
+        fixer = svc.ASLGrammarFixer()
+        monkeypatch.setattr(
+            fixer,
+            "_load_model",
+            lambda: (FakeTokenizer(), FakeModel()),
+        )
+
+        assert fixer.fix_grammar("I DRINK WATER") == "I drink water."
 
 
 # ===================================================================
@@ -218,14 +399,32 @@ class TestProcessFrame:
         uuid = "acc-test-uuid"
         fake_sign = [np.zeros(258, dtype=np.float32) for _ in range(3)]
         self._make_session_with_mock_md(uuid, (True, fake_sign))
-        for _ in range(2):
-            client.post("/process-frame", json={
-                "uuid": uuid,
-                "image_bytes": mock_image_bytes,
-            })
+        words_iter = iter(["HELLO", "WORLD"])
+        with patch("main._predict_word", side_effect=lambda kp: next(words_iter)):
+            for _ in range(2):
+                client.post("/process-frame", json={
+                    "uuid": uuid,
+                    "image_bytes": mock_image_bytes,
+                })
         session = svc.session_states.get(uuid)
         assert session is not None
         assert len(session["predicted_words"]) == 2
+        assert session["predicted_words"] == ["HELLO", "WORLD"]
+
+    def test_deduplicates_consecutive_words(self, mock_image_bytes):
+        uuid = "dedup-test-uuid"
+        fake_sign = [np.zeros(258, dtype=np.float32) for _ in range(3)]
+        self._make_session_with_mock_md(uuid, (True, fake_sign))
+        with patch("main._predict_word", return_value="HELLO"):
+            for _ in range(2):
+                client.post("/process-frame", json={
+                    "uuid": uuid,
+                    "image_bytes": mock_image_bytes,
+                })
+        session = svc.session_states.get(uuid)
+        assert session is not None
+        assert len(session["predicted_words"]) == 1
+        assert session["predicted_words"] == ["HELLO"]
 
     def test_error_returns_500(self, mock_image_bytes):
         uuid = "err-test-uuid"

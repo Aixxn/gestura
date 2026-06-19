@@ -2,8 +2,10 @@ from tensorflow.keras import layers, models
 from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint, ReduceLROnPlateau
 from tensorflow import keras
 import os
+import sys
 import numpy as np
 from sklearn.model_selection import train_test_split
+from sklearn.utils.class_weight import compute_class_weight
 from tensorflow.keras.utils import Sequence
 
 # FIX: Corrected comment — face landmarks are NOT in the feature vector.
@@ -77,7 +79,7 @@ def create_model(num_classes, seq_length=SEQ_LENGTH, feature_dim=FEATURE_DIM,
     return model
 
 if __name__ == "__main__":
-    DATA_ROOT  = '/home/jiyusss/gestura/model/Keypoint_Data_Augmented/'
+    DATA_ROOT  = os.path.join(os.path.dirname(__file__), "keypoint_data_augmented")
     BATCH_SIZE = 32
     EPOCHS     = 150
 
@@ -142,6 +144,21 @@ if __name__ == "__main__":
     # FIX: Lowered learning rate from 1e-3 → 1e-4.
     # BiLSTM+Transformer stacks are unstable at 1e-3; the model diverges
     # in the first few epochs and never recovers meaningful gradients.
+    # Class weights for balanced training (handle remaining imbalance)
+    unique_labels = sorted(set(y_train_labels))
+    class_weights_arr = compute_class_weight(
+        "balanced", classes=np.array(unique_labels), y=np.array(y_train_labels)
+    )
+    class_weight_dict = dict(zip(unique_labels, class_weights_arr))
+    max_w = max(class_weight_dict.values())
+    # Clip extreme weights to avoid over-emphasising tiny classes
+    class_weight_dict = {k: min(v, max_w * 3) for k, v in class_weight_dict.items()}
+
+    if len(sign_classes) > 30:
+        bg_idx = sign_classes.index("BACKGROUND")
+        print(f"\n  BACKGROUND is class index {bg_idx}")
+        print(f"  BACKGROUND weight: {class_weight_dict.get(bg_idx, 1):.3f}")
+
     model.compile(
         optimizer=keras.optimizers.Adam(learning_rate=1e-4),
         loss='sparse_categorical_crossentropy',
@@ -157,14 +174,56 @@ if __name__ == "__main__":
         validation_data=test_generator,
         epochs=EPOCHS,
         callbacks=[early_stopping, checkpoint, reduce_lr],
+        class_weight=class_weight_dict,
         verbose=1
     )
 
     test_loss, test_acc = model.evaluate(test_generator)
-    print(f"Test accuracy: {test_acc:.4f}")
-    print(f"Test loss    : {test_loss:.4f}")
+    print(f"\n{'='*60}")
+    print(f"  Overall test accuracy: {test_acc:.4f}")
+    print(f"  Overall test loss    : {test_loss:.4f}")
+    print(f"{'='*60}")
 
+    # ---- Per-class accuracy ----
+    print(f"\n{'='*60}")
+    print("  Per-class accuracy on test set:")
+    print(f"{'='*60}")
+    all_preds = []
+    all_true  = []
+    for batch_idx in range(len(test_generator)):
+        Xb, yb = test_generator[batch_idx]
+        pb = model.predict(Xb, verbose=0)
+        preds_b = np.argmax(pb, axis=1)
+        all_preds.extend(preds_b.tolist())
+        all_true.extend(yb.tolist())
+    all_preds = np.array(all_preds)
+    all_true   = np.array(all_true)
+    for cls_idx, cls_name in enumerate(sign_classes):
+        mask = all_true == cls_idx
+        if mask.sum() > 0:
+            acc = (all_preds[mask] == cls_idx).mean()
+            print(f"    {cls_name:12s} ({cls_idx:2d}): {acc:.2%}  ({int(mask.sum())} samples)")
+        else:
+            print(f"    {cls_name:12s} ({cls_idx:2d}): N/A (no test samples)")
+
+    # ---- Zero-input sanity check ----
+    print(f"\n{'='*60}")
+    print("  Zero-input sanity check (all-zeros → should be BACKGROUND):")
+    zero_inp = np.zeros((1, SEQ_LENGTH, FEATURE_DIM), dtype=np.float32)
+    zero_probs = model.predict(zero_inp, verbose=0)[0]
+    zero_idx = int(np.argmax(zero_probs))
+    print(f"    Predicted: {sign_classes[zero_idx]} @ {zero_probs[zero_idx]:.2%}")
+    if len(sign_classes) > 30 and zero_idx == sign_classes.index("BACKGROUND"):
+        print("    ✅ Zero input correctly classified as BACKGROUND")
+    elif len(sign_classes) > 30:
+        bg_idx = sign_classes.index("BACKGROUND")
+        print(f"    ⚠️  Expected BACKGROUND (idx {bg_idx}), got {sign_classes[zero_idx]} (idx {zero_idx})")
+        print(f"    BACKGROUND probability: {zero_probs[bg_idx]:.4%}")
+    print(f"{'='*60}")
+
+    # ---- Save ----
     model.save("sign_lstm_transformer_model.keras")
     np.save("sign_classes.npy", np.array(sign_classes))
-    print("\nModel and class map saved.")
-    print("Load classes later with: np.load('sign_classes.npy', allow_pickle=True)")
+    print("\n✅ Model and class map saved.")
+    print("   Files: sign_lstm_transformer_model.keras, best_model.keras, sign_classes.npy")
+    print("   Load classes later with: np.load('sign_classes.npy', allow_pickle=True)")

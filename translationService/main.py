@@ -1,11 +1,60 @@
 import os
+import sys
+from pathlib import Path
+
+os.environ.setdefault("CUDA_VISIBLE_DEVICES", "-1")
+
+# ---- CUDA / XLA setup: find libdevice.10.bc so XLA can compile GPU kernels ----
+# This must happen before any keras/tensorflow import.
+_CUDA_CANDIDATES = [
+    os.environ.get("CUDA_HOME"),
+    os.environ.get("CUDA_ROOT"),
+    os.environ.get("CUDA_TOOLKIT_ROOT_DIR"),
+    "/usr/local/cuda",
+    "/opt/cuda",
+    "/usr/lib/cuda",
+    "/usr/local/cuda-12",
+    "/usr/local/cuda-11",
+]
+_found_cuda = None
+for cand in _CUDA_CANDIDATES:
+    if cand and os.path.isfile(os.path.join(cand, "nvvm", "libdevice", "libdevice.10.bc")):
+        _found_cuda = cand
+        break
+if not _found_cuda:
+    import subprocess
+    try:
+        _nsmi = subprocess.run(["nvidia-smi"], capture_output=True, text=True, timeout=5)
+        if _nsmi.returncode == 0:
+            for _root in ["/usr/lib/cuda", "/usr/local/cuda"]:
+                if os.path.isfile(os.path.join(_root, "nvvm", "libdevice", "libdevice.10.bc")):
+                    _found_cuda = _root
+                    break
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+    if not _found_cuda:
+        try:
+            _nvvm = __import__("nvidia.cuda_nvvm", fromlist=[""])
+            _pkg_path = os.path.dirname(_nvvm.__file__)
+            _candidate = os.path.join(_pkg_path, "nvvm", "libdevice")
+            if os.path.isfile(os.path.join(_candidate, "libdevice.10.bc")):
+                _found_cuda = os.path.dirname(_candidate)
+        except ImportError:
+            pass
+
+if _found_cuda:
+    os.environ.setdefault("XLA_FLAGS", f"--xla_gpu_cuda_data_dir={_found_cuda}")
+    print(f"[CUDA] Found at {_found_cuda}, set XLA_FLAGS")
+else:
+    print("[CUDA] libdevice.10.bc not found in common locations.")
+
 import base64
+import threading
 import numpy as np
 import keras
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 from typing import Optional
-from groq import Groq
 from dotenv import load_dotenv
 from converter import Converter, FEATURE_DIM, WINDOW_SIZE
 from motion_detector import MotionDetector
@@ -16,48 +65,311 @@ load_dotenv()
 app = FastAPI(
     debug=True,
     title='Gesture Translation Service',
-    description='Combined sign segmentation + ASL translation + Groq grammar correction',
+    description='Combined sign segmentation + ASL translation + local FLAN-T5 grammar correction',
 )
 
 # ---------------------------------------------------------------------------
-# ASL Grammar Fixer (unchanged)
+# Semantic Cache for Flan-T5 responses
+# ---------------------------------------------------------------------------
+
+class SemanticCache:
+    def __init__(self, threshold: float = 0.85):
+        self.threshold = threshold
+        self._inputs: list[str] = []
+        self._outputs: list[str] = []
+        self._embeddings: list[np.ndarray] = []
+        self._lock = threading.Lock()
+        self._embedder = None
+        self.available = True
+
+    def _get_embedder(self):
+        if self._embedder is None:
+            try:
+                from sentence_transformers import SentenceTransformer
+                self._embedder = SentenceTransformer("all-MiniLM-L6-v2")
+            except Exception as e:
+                print(f"[SemanticCache] Failed to load embedding model: {e}")
+                self.available = False
+        return self._embedder
+
+    def lookup(self, text: str) -> str | None:
+        if not self.available or not self._embeddings:
+            return None
+        embedder = self._get_embedder()
+        if embedder is None:
+            return None
+        try:
+            query_emb = embedder.encode(text)
+            with self._lock:
+                best_idx = -1
+                best_sim = -1.0
+                for i, stored_emb in enumerate(self._embeddings):
+                    denom = np.linalg.norm(query_emb) * np.linalg.norm(stored_emb) + 1e-10
+                    sim = float(np.dot(query_emb, stored_emb) / denom)
+                    if sim > best_sim:
+                        best_sim = sim
+                        best_idx = i
+                if best_sim >= self.threshold:
+                    print(f"[Cache HIT] '{text}' -> '{self._outputs[best_idx]}' "
+                          f"(sim={best_sim:.3f})")
+                    return self._outputs[best_idx]
+            return None
+        except Exception as e:
+            print(f"[SemanticCache] Lookup error: {e}")
+            return None
+
+    def store(self, text: str, output: str):
+        if not self.available:
+            return
+        embedder = self._get_embedder()
+        if embedder is None:
+            return
+        try:
+            emb = embedder.encode(text)
+            with self._lock:
+                self._inputs.append(text)
+                self._outputs.append(output)
+                self._embeddings.append(emb)
+        except Exception as e:
+            print(f"[SemanticCache] Store error: {e}")
+
+    @property
+    def size(self) -> int:
+        with self._lock:
+            return len(self._inputs)
+
+# ---------------------------------------------------------------------------
+# ASL Grammar Fixer
 # ---------------------------------------------------------------------------
 
 class ASLGrammarFixer:
-    def __init__(self, api_key: str = None):
-        self.client = Groq(api_key=api_key or os.getenv("GROQ_API_KEY"))
-        self.model = "llama-3.3-70b-versatile"
-        self.system_prompt = """You are an expert in American Sign Language (ASL) grammar conversion.
-Convert ASL gloss text (space-separated signs) into natural, grammatically correct English.
+    def __init__(self, model_name: str | None = None, max_new_tokens: int = 100):
+        local_model_path = Path("models/flan-t5-asl-mini")
+        default_model = str(local_model_path) if local_model_path.exists() else "google/flan-t5-small"
+        self.model_name = model_name or os.getenv("FLAN_T5_MODEL", default_model)
+        self.max_new_tokens = max_new_tokens
+        self._tokenizer = None
+        self._model = None
+        self.prompt_template = (
+            "translate ASL gloss to English: {asl_gloss}"
+        )
+        cache_threshold = float(os.getenv("CACHE_SIMILARITY_THRESHOLD", "0.85"))
+        self.cache = SemanticCache(threshold=cache_threshold)
 
-Rules:
-- ASL uses topic-comment structure
-- No verb conjugations in ASL
-- Directional verbs indicate subject/object
-- Facial expressions add meaning
-- Time is established at start
+    def _load_model(self):
+        if self._tokenizer is None or self._model is None:
+            from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 
-Examples:
-ASL: "YESTERDAY ME GO STORE BUY MILK" → "Yesterday, I went to the store to buy milk."
-ASL: "ME HUNGRY EAT WANT" → "I am hungry and want to eat."
-ASL: "YOU LIKE COFFEE?" → "Do you like coffee?"
-"""
+            self._tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+            self._model = AutoModelForSeq2SeqLM.from_pretrained(self.model_name)
+            self._model.eval()
+        return self._tokenizer, self._model
 
     def fix_grammar(self, asl_gloss: str) -> str:
+        cleaned_gloss = self._clean_gloss(asl_gloss)
+        if not cleaned_gloss:
+            return ""
+
+        cached = self.cache.lookup(cleaned_gloss)
+        if cached is not None:
+            return cached
+
+        fallback = self._rule_based_translate(cleaned_gloss)
         try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": self.system_prompt},
-                    {"role": "user", "content": f"Convert to English: {asl_gloss}"}
-                ],
-                temperature=0.3,
-                max_tokens=100
+            tokenizer, model = self._load_model()
+            prompt = self.prompt_template.format(asl_gloss=cleaned_gloss)
+            inputs = tokenizer(
+                prompt,
+                return_tensors="pt",
+                truncation=True,
+                max_length=256,
             )
-            return response.choices[0].message.content.strip()
+
+            if hasattr(inputs, "to"):
+                inputs = inputs.to(model.device)
+
+            output_ids = model.generate(
+                **inputs,
+                max_new_tokens=self.max_new_tokens,
+                num_beams=4,
+                do_sample=False,
+            )
+            translated = tokenizer.decode(output_ids[0], skip_special_tokens=True).strip()
+            translated = self._clean_output(translated)
+            if self._is_acceptable_polish(cleaned_gloss, translated):
+                self.cache.store(cleaned_gloss, translated)
+                return translated
+            raise ValueError(f"FLAN-T5 returned invalid English output: {translated}")
         except Exception as e:
-            print(f"LLM Error: {e}")
+            print(f"FLAN-T5 Error: {e}")
+            if fallback:
+                self.cache.store(cleaned_gloss, fallback)
+                return fallback
             raise e
+
+    def _clean_output(self, text: str) -> str:
+        return text.strip().strip('"').strip("'").strip()
+
+    def _clean_gloss(self, asl_gloss: str) -> str:
+        tokens = self._collapse_repeated_tokens(self._tokenize_gloss(asl_gloss))
+        return " ".join(tokens)
+
+    def _normalize_for_compare(self, text: str) -> list[str]:
+        cleaned = text.replace("?", " ").replace(".", " ").replace(",", " ")
+        return [token.upper() for token in cleaned.split()]
+
+    def _is_echo(self, asl_gloss: str, translated: str) -> bool:
+        return self._normalize_for_compare(asl_gloss) == self._normalize_for_compare(translated)
+
+    def _is_acceptable_polish(self, asl_gloss: str, translated: str) -> bool:
+        if not translated:
+            return False
+        lowered = translated.lower()
+        if "asl gloss:" in lowered or "structured english:" in lowered:
+            return False
+        has_letters = any(char.isalpha() for char in translated)
+        if has_letters and translated.upper() == translated:
+            return False
+        return True
+
+    def _tokenize_gloss(self, asl_gloss: str) -> list[str]:
+        return [
+            token.strip('.,?!;:"\'').upper()
+            for token in asl_gloss.split()
+            if token.strip('.,?!;:"\'')
+        ]
+
+    def _collapse_repeated_tokens(self, tokens: list[str]) -> list[str]:
+        collapsed: list[str] = []
+        for token in tokens:
+            if collapsed and collapsed[-1] == token:
+                continue
+            collapsed.append(token)
+        return collapsed
+
+    def _rule_based_translate(self, asl_gloss: str) -> str:
+        cleaned = " ".join(asl_gloss.split())
+        if not cleaned:
+            return ""
+
+        is_question = cleaned.rstrip().endswith("?")
+        tokens = self._collapse_repeated_tokens(self._tokenize_gloss(cleaned))
+        if not tokens:
+            return ""
+
+        if tokens == ["ME", "HUNGRY", "EAT", "WANT"]:
+            return "I am hungry and want to eat."
+        if tokens == ["YESTERDAY", "ME", "GO", "STORE", "BUY", "MILK"]:
+            return "Yesterday, I went to the store to buy milk."
+        if tokens == ["WHAT", "YOU", "WANT"]:
+            return "What do you want?"
+        if tokens == ["WHERE", "MOTHER", "GO"]:
+            return "Where does mother go?"
+        if tokens == ["MY", "NAME"]:
+            return "My name is Gestura."
+        if tokens == ["YES"]:
+            return "Yes."
+        if tokens == ["NO"]:
+            return "No."
+
+        pronouns = {
+            "ME": "I",
+            "I": "I",
+            "YOU": "you",
+            "HE": "he",
+            "SHE": "she",
+            "WE": "we",
+            "THEY": "they",
+            "MOTHER": "mother",
+            "FRIEND": "friend",
+        }
+        adjectives = {
+            "HUNGRY": "hungry",
+            "THIRSTY": "thirsty",
+            "HAPPY": "happy",
+            "SAD": "sad",
+            "ANGRY": "angry",
+            "TIRED": "tired",
+            "GOOD": "good",
+            "BAD": "bad",
+        }
+        verbs = {
+            "DRINK": "drink",
+            "EAT": "eat",
+            "LIKE": "like",
+            "WANT": "want",
+            "GO": "go",
+            "BUY": "buy",
+            "SEE": "see",
+            "ASK": "ask",
+        }
+        nouns = {
+            "WATER": "water",
+            "MILK": "milk",
+            "COFFEE": "coffee",
+            "APPLE": "an apple",
+            "BANANA": "a banana",
+            "STORE": "the store",
+            "FOOD": "food",
+            "FRIEND": "a friend",
+            "MOTHER": "mother",
+        }
+        locations = {
+            "HOME": "at home",
+            "SCHOOL": "at school",
+            "STORE": "at the store",
+        }
+
+        if tokens[0] == "PLEASE":
+            remaining = tokens[1:]
+            verb_index = next((i for i, token in enumerate(remaining) if token in verbs), -1)
+            if verb_index >= 0:
+                verb = verbs[remaining[verb_index]]
+                phrase_tokens = remaining[verb_index + 1:]
+                object_parts = [
+                    nouns.get(token, token.lower())
+                    for token in phrase_tokens
+                    if token not in locations
+                ]
+                location_parts = [
+                    locations[token]
+                    for token in phrase_tokens
+                    if token in locations
+                ]
+                body_parts = [verb, *object_parts, *location_parts]
+                return f"Please {' '.join(body_parts)}."
+
+        subject_token = tokens[0]
+        verb_token = tokens[1] if len(tokens) > 1 else ""
+        object_tokens = tokens[2:]
+
+        if subject_token in pronouns and verb_token in adjectives:
+            subject = pronouns[subject_token]
+            sentence = f"{subject} am {adjectives[verb_token]}."
+            if subject in {"you", "we", "they"}:
+                sentence = f"{subject} are {adjectives[verb_token]}."
+            elif subject != "I":
+                sentence = f"{subject} is {adjectives[verb_token]}."
+            return sentence[0].upper() + sentence[1:]
+
+        if subject_token in pronouns and verb_token in verbs:
+            subject = pronouns[subject_token]
+            verb = verbs[verb_token]
+            obj = " ".join(nouns.get(token, token.lower()) for token in object_tokens)
+
+            if is_question and subject == "you":
+                return f"Do you {verb}{(' ' + obj) if obj else ''}?"
+
+            if subject in {"he", "she", "mother", "friend"} and verb not in {"go"}:
+                verb = f"{verb}s"
+            elif subject in {"he", "she", "mother", "friend"} and verb == "go":
+                verb = "goes"
+
+            sentence = f"{subject} {verb}{(' ' + obj) if obj else ''}."
+            return sentence[0].upper() + sentence[1:]
+
+        fallback = " ".join(token.lower() for token in tokens)
+        return fallback.capitalize() + ("?" if is_question else ".")
 
 grammar_fixer = ASLGrammarFixer()
 
@@ -67,21 +379,39 @@ grammar_fixer = ASLGrammarFixer()
 
 MODEL_WINDOW_SIZE = WINDOW_SIZE  # 35 — same as segmentation's sliding window
 
+_SERVICE_DIR = Path(__file__).resolve().parent
+_MODEL_PATH = _SERVICE_DIR / "best_model.keras"
+_CLASSES_PATH = _SERVICE_DIR / "sign_classes.npy"
+
 try:
-    model = keras.models.load_model('model.keras')
-    print(f"[TranslationService] Model loaded (output classes: {model.output_shape[-1]})")
+    model = keras.models.load_model(_MODEL_PATH)
+    print(f"[TranslationService] Model loaded from '{_MODEL_PATH}' "
+          f"(output classes: {model.output_shape[-1]})")
 except Exception as e:
     print(f"[TranslationService] No model loaded ({e}) — using fallback predictions")
     model = None
 
 NUM_CLASSES = model.output_shape[-1] if model else 30
-WORD_MAPPING = [f"word_{i}" for i in range(NUM_CLASSES)]
+
+WORD_MAPPING = []
+try:
+    WORD_MAPPING = list(np.load(_CLASSES_PATH, allow_pickle=True))
+    if len(WORD_MAPPING) != NUM_CLASSES:
+        print(f"[TranslationService] Warning: sign_classes.npy ({len(WORD_MAPPING)} classes)"
+              f" doesn't match model ({NUM_CLASSES}) — using fallback labels")
+        WORD_MAPPING = []
+except Exception as e:
+    print(f"[TranslationService] Could not load sign_classes.npy ({e}) — using fallback labels")
+
+if not WORD_MAPPING:
+    WORD_MAPPING = [f"word_{i}" for i in range(NUM_CLASSES)]
 
 # ---------------------------------------------------------------------------
 # Segmentation pipeline (singletons)
 # ---------------------------------------------------------------------------
 
 converter = Converter()
+_MD_STILLNESS_FLOOR = float(os.getenv("MD_STILLNESS_FLOOR", "0.5"))
 motion_detector = MotionDetector(
     low_factor=0.5,
     high_factor=4.0,
@@ -90,7 +420,7 @@ motion_detector = MotionDetector(
     history_size=30,
     feature_dim=FEATURE_DIM,
     motion_smoothing=0.6,
-    stillness_floor=0.3,
+    stillness_floor=_MD_STILLNESS_FLOOR,
 )
 
 # ---------------------------------------------------------------------------
@@ -138,6 +468,10 @@ class WindowInput(BaseModel):
     )
 
 # ---------------------------------------------------------------------------
+# Confidence floor — predictions below this are treated as BACKGROUND.
+# Prevents the model from force-guessing on garbage/ambiguous input.
+CONFIDENCE_THRESH = 0.7
+
 # Helper: run ML inference on a completed sign
 # ---------------------------------------------------------------------------
 
@@ -149,8 +483,11 @@ def _predict_word(keypoints_sequence: list[list[float]]) -> str:
     inp = window_np[np.newaxis, ...]
     probs = model.predict(inp, verbose=0)
     idx = int(np.argmax(probs[0]))
+    conf = float(probs[0][idx])
     if idx >= len(WORD_MAPPING):
         return "unknown"
+    if conf < CONFIDENCE_THRESH:
+        return "BACKGROUND"
     return WORD_MAPPING[idx]
 
 # ---------------------------------------------------------------------------
@@ -162,8 +499,6 @@ async def process_frame(request: FrameRequest):
     try:
         raw_bytes = base64.b64decode(request.image_bytes)
         keypoints = converter.point_detection(raw_bytes)
-        persisted = converter.get_persisted_keypoints()
-        converter.process_new_frame(keypoints)
 
         session = session_states.setdefault(request.uuid, {
             "motion_detector": MotionDetector(
@@ -174,21 +509,32 @@ async def process_frame(request: FrameRequest):
                 history_size=30,
                 feature_dim=FEATURE_DIM,
                 motion_smoothing=0.6,
-                stillness_floor=0.3,
+                stillness_floor=_MD_STILLNESS_FLOOR,
             ),
             "predicted_words": [],
             "sign_count": 0,
         })
 
         md = session["motion_detector"]
-        sign_ended, completed_sign = md.update(persisted, keypoints)
+
+        if converter.is_idle:
+            md.reset()
+            return FrameResponse(status="idle")
+
+
+        sign_ended, completed_sign = md.update(keypoints)
 
         if sign_ended and completed_sign is not None:
             kp_list = [kp.tolist() for kp in completed_sign]
             word = _predict_word(kp_list)
+            # Skip BACKGROUND predictions — they are not real signs
+            if word == "BACKGROUND":
+                return FrameResponse(status="background")
+
             sign_idx = session["sign_count"]
             session["sign_count"] += 1
-            session["predicted_words"].append(word)
+            if not session["predicted_words"] or session["predicted_words"][-1] != word:
+                session["predicted_words"].append(word)
             return FrameResponse(
                 status="word_detected",
                 word=word,

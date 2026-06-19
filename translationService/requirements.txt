@@ -12,14 +12,13 @@ fastapi==0.120.1
 flatbuffers==25.9.23
 gast==0.6.0
 google-pasta==0.2.0
-groq==0.33.0
 grpcio==1.76.0
 h11==0.16.0
 h5py==3.15.1
 httpcore==1.0.9
 httpx==0.28.1
 idna==3.11
-keras==3.12.0
+keras==3.14.1
 libclang==18.1.1
 Markdown==3.9
 markdown-it-py==4.0.0
@@ -47,6 +46,9 @@ tensorboard==2.20.0
 tensorboard-data-server==0.7.2
 tensorflow==2.20.0
 termcolor==3.2.0
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.5.1+cpu
+transformers==4.46.3
 typing-inspection==0.4.2
 typing_extensions==4.15.0
 urllib3==2.5.0
@@ -57,3 +59,5 @@ wrapt==2.0.0
 opencv-python==4.11.0.86
 opencv-contrib-python==4.11.0.86
 mediapipe>=0.10.21
+sentencepiece==0.2.0
+sentence-transformers>=3.0.0

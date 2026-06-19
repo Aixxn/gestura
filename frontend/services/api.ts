@@ -91,7 +91,6 @@ export const gesturaAPI = {
         body: formData,
         headers,
       });
-
       if (!response.ok) {
         const errorText = await response.text();
         console.error(`HTTP error! status: ${response.status}, body: ${errorText}`);

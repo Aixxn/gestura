@@ -5,7 +5,7 @@ import cv2 as cv
 import numpy as np
 
 # Configuration
-VIDEO_ROOT = r"/home/jiyusss/Downloads/ASL_Citizen/videos"
+VIDEO_ROOT = os.path.join(os.path.dirname(__file__), "videos")
 
 ASL_MINI_WORDS = {
     'AND', 'ANGRY', 'APPLE', 'ASK', 'BAD', 'DRINK', 'EAT', 'FRIEND', 'GO', 'GOOD',

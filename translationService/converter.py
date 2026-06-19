@@ -9,6 +9,14 @@ import os
 # Defaults – can be overridden via env vars
 WINDOW_SIZE = int(os.getenv("WINDOW_SIZE", "35"))
 FEATURE_DIM = int(os.getenv("FEATURE_DIM", "258"))
+PERSIST_WINDOW = int(os.getenv("PERSIST_WINDOW", "5"))
+# Number of consecutive frames both hands must be absent before we consider
+# the user idle.  Must be **larger** than the motion detector's
+# ``still_frames_required`` (default 8) so a natural sign-ending stillness
+# triggers the boundary *before* the idle gate resets the pipeline.
+IDLE_THRESHOLD = int(os.getenv("IDLE_THRESHOLD", "15"))
+DETECTION_WIDTH = int(os.getenv("DETECTION_WIDTH", "640"))
+DETECTION_HEIGHT = int(os.getenv("DETECTION_HEIGHT", "480"))
 
 _LH_DIM = 21 * 3      # 63
 _RH_DIM = 21 * 3      # 63
@@ -26,6 +34,33 @@ _MODEL_URL = (
 _MODEL_PATH = os.path.join(_MODEL_DIR, "holistic_landmarker.task")
 
 
+class ExponentialMovingAverage:
+    """Smooths out webcam micro-jitter to prevent static signs from looking like motion.
+
+    Applied AFTER bounded persistence and nose-normalisation, the EMA blends
+    each new keypoint frame with previous ones, killing high-frequency noise
+    while preserving the overall gesture trajectory.
+
+    ``alpha=1.0`` = no smoothing (pass-through).
+    ``alpha=0.4`` = moderate (default).
+    ``alpha=0.1`` = heavy smoothing.
+    """
+
+    def __init__(self, alpha: float = 0.4):
+        self.alpha = alpha
+        self.state: np.ndarray | None = None
+
+    def reset(self):
+        self.state = None
+
+    def update(self, current_val: np.ndarray) -> np.ndarray:
+        if self.state is None:
+            self.state = current_val.copy()
+            return current_val.copy()
+        self.state = self.alpha * current_val + (1.0 - self.alpha) * self.state
+        return self.state
+
+
 def _ensure_model() -> str:
     """Download the holistic landmarker model if not present."""
     if os.path.exists(_MODEL_PATH):
@@ -36,35 +71,57 @@ def _ensure_model() -> str:
     return _MODEL_PATH
 
 
+def _prepare_image_for_detection(cv_image: np.ndarray) -> np.ndarray:
+    """Return a fixed-size BGR image for MediaPipe detection.
+
+    MediaPipe's holistic graph keeps internal segmentation smoothing state.
+    Preview snapshots can arrive with changing dimensions, which makes that
+    smoothing calculator fail. Letterboxing keeps dimensions stable without
+    distorting the signer.
+    """
+    src_h, src_w = cv_image.shape[:2]
+    if src_h <= 0 or src_w <= 0:
+        raise ValueError("Cannot process an empty image.")
+
+    scale = min(DETECTION_WIDTH / src_w, DETECTION_HEIGHT / src_h)
+    resized_w = max(1, int(round(src_w * scale)))
+    resized_h = max(1, int(round(src_h * scale)))
+
+    resized = cv.resize(cv_image, (resized_w, resized_h), interpolation=cv.INTER_AREA)
+    canvas = np.zeros((DETECTION_HEIGHT, DETECTION_WIDTH, 3), dtype=cv_image.dtype)
+    x = (DETECTION_WIDTH - resized_w) // 2
+    y = (DETECTION_HEIGHT - resized_h) // 2
+    canvas[y:y + resized_h, x:x + resized_w] = resized
+    return canvas
+
+
 class Converter:
     """
-    Converts raw image bytes → MediaPipe Holistic keypoints → sliding window.
+    Converts raw image bytes → MediaPipe Holistic keypoints.
 
     Face landmarks are intentionally excluded (the current ML model only
     uses hands + pose).  All coordinates are normalised relative to the
     **pose nose** (landmark 0) for translation invariance.
 
-    Usage
-    -----
-        conv = Converter()
-        kp = conv.point_detection(raw_image_bytes)       # 258-dim vector
-        window = conv.process_new_frame(kp)               # (WINDOW_SIZE, FEATURE_DIM)
-        final = conv.stop()                                # current window snapshot
+    Hand keypoints use **bounded persistence**: last-known positions fill in
+    during brief detection flicker (up to *PERSIST_WINDOW* frames), then
+    decay to zeros for genuinely absent hands.  A single unified keypoint
+    vector is returned for both the motion detector and the ML model.
     """
 
-    def __init__(self):
+    def __init__(self, use_gpu: bool = False):
         model_path = _ensure_model()
-        base_options = python.BaseOptions(model_asset_path=model_path)
+        delegate = python.BaseOptions.Delegate.GPU if use_gpu else python.BaseOptions.Delegate.CPU
+        base_options = python.BaseOptions(
+            model_asset_path=model_path,
+            delegate=delegate,
+        )
         options = vision.HolisticLandmarkerOptions(
             base_options=base_options,
             running_mode=vision.RunningMode.IMAGE,
             min_hand_landmarks_confidence=0.7,
         )
         self.landmarker = vision.HolisticLandmarker.create_from_options(options)
-
-        # Fixed-size sliding window buffer
-        self.window = np.zeros((WINDOW_SIZE, FEATURE_DIM), dtype=np.float32)
-        self.current_length = 0
 
         self._last_result = None
 
@@ -83,12 +140,16 @@ class Converter:
         self._last_rh = np.zeros(_RH_DIM, dtype=np.float32)
         self._last_pose = np.zeros(_POSE_DIM, dtype=np.float32)
 
-        # Persisted keypoint vector (built by point_detection for the
-        # motion detector — uses last-known hand positions to avoid spikes).
-        self._persisted_kp = np.zeros(FEATURE_DIM, dtype=np.float32)
+        # Lost-frame counters for bounded persistence.
+        # Incremented each frame a hand is undetected; reset on detection.
+        # Start at IDLE_THRESHOLD so is_idle is True at init — prevents
+        # the motion detector from firing false boundaries on the first
+        # ~15 frames before the user has started signing.
+        self._lh_lost_counter = IDLE_THRESHOLD
+        self._rh_lost_counter = IDLE_THRESHOLD
 
         # Unnormalised raw components from the most recent frame; used by
-        # _build_persisted_kp() to reconstruct a motion-stable vector.
+        # _build_unified_kp() to reconstruct a bounded-persistence vector.
         self._raw_components: tuple[np.ndarray, ...] | None = None
 
     def __del__(self):
@@ -103,67 +164,119 @@ class Converter:
         """
         Decode raw image bytes and run MediaPipe Holistic.
 
-        Returns **raw** keypoints (zeros for undetected hand groups) — these
-        match the training data distribution of the ML model.
-
-        Use :meth:`get_persisted_keypoints` to obtain a motion-stable version
-        for the motion detector (last-known positions fill in for flicker).
+        Returns a **unified** keypoint vector with bounded persistence:
+        last-known hand positions fill in during brief detection flicker
+        (up to *PERSIST_WINDOW* frames), then decay to zeros for genuinely
+        absent hands.  Suitable for **both** the motion detector and the
+        ML inference pipeline.
         """
         nparr = np.frombuffer(image_bytes, np.uint8)
         cv_image = cv.imdecode(nparr, cv.IMREAD_COLOR)
         if cv_image is None:
             raise ValueError("Could not decode image bytes (corrupt data).")
 
+        cv_image = _prepare_image_for_detection(cv_image)
         image_rgb = cv.cvtColor(cv_image, cv.COLOR_BGR2RGB)
+        # Ensure contiguous memory layout — mp.Image can choke on
+        # non-contiguous views returned by cv.cvtColor.
+        image_rgb = np.ascontiguousarray(image_rgb)
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=image_rgb)
 
         detection_result = self.landmarker.detect(mp_image)
         self._last_result = detection_result
-        raw_kp = self._extract_keypoints(detection_result)
+        kp = self._extract_keypoints(detection_result)
 
-        self._persisted_kp = self._build_persisted_kp()
-
-        if raw_kp.shape != (FEATURE_DIM,):
+        if kp.shape != (FEATURE_DIM,):
             raise ValueError(
-                f"MediaPipe returned {raw_kp.shape[0]}-dim keypoints, "
+                f"MediaPipe returned {kp.shape[0]}-dim keypoints, "
                 f"expected {FEATURE_DIM}. Check FEATURE_DIM env var."
             )
 
-        return raw_kp
+        return kp
+
+    def extract_from_frame(self, cv_image: np.ndarray) -> np.ndarray:
+        """Process a cv2 BGR frame directly (skips JPEG encode/decode).
+
+        Same result as :meth:`point_detection` but avoids the encode-decode
+        round trip.  Useful for offline data extraction from video files.
+        """
+        cv_image = _prepare_image_for_detection(cv_image)
+        image_rgb = cv.cvtColor(cv_image, cv.COLOR_BGR2RGB)
+        # Ensure contiguous memory layout — mp.Image can choke on
+        # non-contiguous views returned by cv.cvtColor.
+        image_rgb = np.ascontiguousarray(image_rgb)
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=image_rgb)
+
+        detection_result = self.landmarker.detect(mp_image)
+        self._last_result = detection_result
+        kp = self._extract_keypoints(detection_result)
+
+        if kp.shape != (FEATURE_DIM,):
+            raise ValueError(
+                f"MediaPipe returned {kp.shape[0]}-dim keypoints, "
+                f"expected {FEATURE_DIM}. Check FEATURE_DIM env var."
+            )
+        return kp
+
+    def reset_state(self):
+        """Reset per-video state (counters, caches, buffer).
+
+        Call between videos during batch extraction so bounded-persistence
+        counters don't carry over from one video to the next.
+        """
+        self._lh_lost_counter = IDLE_THRESHOLD
+        self._rh_lost_counter = IDLE_THRESHOLD
+        self._last_lh = np.zeros(_LH_DIM, dtype=np.float32)
+        self._last_rh = np.zeros(_RH_DIM, dtype=np.float32)
+        self._last_pose = np.zeros(_POSE_DIM, dtype=np.float32)
+        self._raw_components = None
+
+    @property
+    def is_idle(self) -> bool:
+        """True when **both** hands have been absent for >= IDLE_THRESHOLD frames.
+
+        During idle the motion detector receives only persisted or zero
+        keypoints and would otherwise trigger false sign boundaries.
+        One-handed ASL signs are fine — the signing hand keeps its own
+        counter reset even when the other hand is not visible.
+
+        Note
+        ----
+        IDLE_THRESHOLD must be **larger** than the motion detector's
+        ``still_frames_required`` (default 8) so that a natural end-of-sign
+        stillness triggers the boundary before the idle gate preempts it.
+        """
+        return (self._lh_lost_counter >= IDLE_THRESHOLD
+                and self._rh_lost_counter >= IDLE_THRESHOLD)
+
+    def get_raw_keypoints(self) -> np.ndarray:
+        """Return the raw (non-persisted) keypoint from the current frame.
+
+        Hands that were not detected in this frame are set to **zeros**,
+        matching the ML model's training distribution.  Use this as the
+        ``store_kp`` argument to :meth:`~motion_detector.MotionDetector.update`
+        so the sign buffer never contains persisted (last-known) positions.
+        """
+        if self._raw_components is None:
+            return np.zeros(FEATURE_DIM, dtype=np.float32)
+        raw_lh, raw_rh, raw_pose = self._raw_components
+        nose_xyz = self._nose_anchor(raw_pose)
+        return self._normalize(raw_lh, raw_rh, raw_pose, nose_xyz)
 
     def get_persisted_keypoints(self) -> np.ndarray:
-        """Return the motion-stable keypoint vector for the current frame.
+        """Return the current unified keypoint vector (bounded persistence).
 
-        Uses last-known hand positions when MediaPipe briefly loses detection,
-        so the motion detector sees smooth transitions instead of zero-to-real
-        spikes.  **Not** suitable for the ML model — the model was trained on
-        zeros for missing hands.
+        This is now identical to what :meth:`point_detection` returns.
+        Retained for backward compatibility.
         """
-        return self._persisted_kp
-
-    def process_new_frame(self, frame_vector: np.ndarray) -> np.ndarray:
-        """Insert a new frame into the sliding window buffer.
-
-        Returns the current window state: (WINDOW_SIZE, FEATURE_DIM).
-        Before the buffer is full, the right side stays zero-padded.
-        """
-        if self.current_length < WINDOW_SIZE:
-            self.window[self.current_length] = frame_vector
-            self.current_length += 1
-        else:
-            self.window[:-1] = self.window[1:]
-            self.window[-1] = frame_vector
-        return self.window
-
-    def stop(self) -> np.ndarray:
-        """Return the current window snapshot (right-padded with zeros)."""
-        return self.window
+        return self._build_unified_kp()
 
     def draw_landmarks(self, frame: np.ndarray) -> None:
         """Draw hand landmarks onto *frame* in-place.
 
-        Uses cached coordinates when MediaPipe briefly loses a hand,
-        so the overlay stays stable instead of flickering.
+        Uses cached coordinates when MediaPipe briefly loses a hand
+        (up to PERSIST_WINDOW frames), then clears the cache so the
+        overlay disappears when both hands are genuinely absent.
         """
         if not hasattr(self, '_corrected_lh'):
             return
@@ -174,9 +287,11 @@ class Converter:
 
         hand_conn = [(i, i + 1) for i in range(20)]
 
-        # Left hand
+        # Left hand — update cache when detected; draw only if still alive
         if self._corrected_lh:
             self._draw_lh = [(lm.x, lm.y) for lm in self._corrected_lh]
+        elif self._lh_lost_counter >= PERSIST_WINDOW:
+            self._draw_lh.clear()
         if self._draw_lh:
             pts = [_to_px(nx, ny) for nx, ny in self._draw_lh]
             for a, b in hand_conn:
@@ -187,6 +302,8 @@ class Converter:
         # Right hand
         if self._corrected_rh:
             self._draw_rh = [(lm.x, lm.y) for lm in self._corrected_rh]
+        elif self._rh_lost_counter >= PERSIST_WINDOW:
+            self._draw_rh.clear()
         if self._draw_rh:
             pts = [_to_px(nx, ny) for nx, ny in self._draw_rh]
             for a, b in hand_conn:
@@ -244,14 +361,15 @@ class Converter:
         return np.concatenate([lh, rh, pose]).astype(np.float32)
 
     def _extract_keypoints(self, result) -> np.ndarray:
-        """Extract **raw** keypoints — zeros for undetected landmark groups.
+        """Extract keypoints with bounded persistence.
 
-        Normalised relative to the pose nose.  The persistence cache is
-        updated here but NOT used in the returned vector.
+        1. Extracts raw landmark data from the MediaPipe result.
+        2. Updates the persistence cache (_last_lh / _last_rh / _last_pose).
+        3. Tracks lost-frame counters for each hand.
+        4. Builds and returns a unified vector with bounded persistence.
         """
         lh_data, rh_data = self._fix_handedness(result)
 
-        # Store corrected references for draw_landmarks
         self._corrected_lh = lh_data
         self._corrected_rh = rh_data
 
@@ -264,6 +382,9 @@ class Converter:
                 lh[idx + 1] = lm.y
                 lh[idx + 2] = lm.z
             self._last_lh = lh.copy()
+            self._lh_lost_counter = 0
+        else:
+            self._lh_lost_counter += 1
 
         # --- Right hand (21 × 3 = 63) ---
         rh = np.zeros(_RH_DIM, dtype=np.float32)
@@ -274,6 +395,9 @@ class Converter:
                 rh[idx + 1] = lm.y
                 rh[idx + 2] = lm.z
             self._last_rh = rh.copy()
+            self._rh_lost_counter = 0
+        else:
+            self._rh_lost_counter += 1
 
         # --- Pose (33 × 4 = 132; includes visibility) ---
         pose = np.zeros(_POSE_DIM, dtype=np.float32)
@@ -286,29 +410,34 @@ class Converter:
                 pose[idx + 3] = lm.visibility if hasattr(lm, 'visibility') else 0.0
             self._last_pose = pose.copy()
 
-        # Store unnormalised copies for _build_persisted_kp
         self._raw_components = (lh.copy(), rh.copy(), pose.copy())
 
-        # Normalise all components relative to the nose
-        nose_xyz = self._nose_anchor(pose)
-        return self._normalize(lh, rh, pose, nose_xyz)
+        return self._build_unified_kp()
 
-    def _build_persisted_kp(self) -> np.ndarray:
-        """Build a motion-stable keypoint vector using last-known hand positions.
+    def _build_unified_kp(self) -> np.ndarray:
+        """Build a unified keypoint vector with bounded persistence.
 
-        Uses the current frame's pose but substitutes **last-known** hand
-        keypoints when MediaPipe briefly loses a hand.  Normalised relative
-        to the nose from the current raw pose.
+        Uses the current frame's raw pose.  For each hand:
+        - **Detected** or lost for < PERSIST_WINDOW frames → last-known position.
+        - Lost for ≥ PERSIST_WINDOW frames → zeros (genuinely absent).
+
+        Normalised relative to the pose nose.
         """
         if self._raw_components is None:
             return np.zeros(FEATURE_DIM, dtype=np.float32)
 
-        _, _, raw_pose = self._raw_components  # discard raw lh/rh
+        _, _, raw_pose = self._raw_components
         nose_xyz = self._nose_anchor(raw_pose)
 
-        # Use cached hand keypoints (last-known positions)
-        lh = self._last_lh.copy()
-        rh = self._last_rh.copy()
-        pose = raw_pose.copy()
+        if self._lh_lost_counter >= PERSIST_WINDOW:
+            lh = np.zeros(_LH_DIM, dtype=np.float32)
+        else:
+            lh = self._last_lh.copy()
 
+        if self._rh_lost_counter >= PERSIST_WINDOW:
+            rh = np.zeros(_RH_DIM, dtype=np.float32)
+        else:
+            rh = self._last_rh.copy()
+
+        pose = raw_pose.copy()
         return self._normalize(lh, rh, pose, nose_xyz)

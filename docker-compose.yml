@@ -8,7 +8,10 @@ services:
       - mongodb_data:/data/db
 
   apigateway:
-    image: baronocasiones/gestura-apigateway:dev
+    build:
+      context: ./apiGateway
+      dockerfile: Dockerfile
+    image: gestura-apigateway:local
     ports: 
       - "8080:8080"
       - "9898:9898"
@@ -18,19 +21,19 @@ services:
       - translationService
     environment:
       - MONGODB_URI=mongodb://mongodb:27017
-      - TRANSLATION_SERVICE_URL=http://translationService:7860
+      - TRANSLATION_SERVICE_URL=http://translationService:8000
       - WEB_SOCKET_HOST=0.0.0.0
       - WEB_SOCKET_PORT=9898
       - JWT_SECRET=gestura-dev-jwt-secret-change-in-production
       - JWT_EXPIRES_IN=7d
 
   translationService:
-    image: baronocasiones/gestura-translationservice:dev
     build:
       context: ./translationService
       dockerfile: Dockerfile
+    image: gestura-translationservice:local
     ports:
-      - "7860:7860"
+      - "7860:8000"
     restart: always
 
 volumes:

@@ -3,13 +3,16 @@ import React, { useState } from 'react';
 import {
   Image,
   ImageBackground,
-  SafeAreaView,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
   StatusBar,
   Text,
   TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { registerUser } from '../../services/auth';
 
@@ -43,7 +46,7 @@ const Registration = () => {
         full_name: fullName,
         password,
       });
-      router.push('/(tabs)/camera');
+      router.replace('/(tabs)/camera');
     } catch (error) {
       const message =
         error instanceof Error
@@ -64,113 +67,125 @@ const Registration = () => {
         resizeMode="cover"
       >
         <SafeAreaView style={styles.safeArea}>
-          <View style={styles.brandRow}>
-            <Text style={styles.brandText}>Gestura</Text>
-          </View>
+          <KeyboardAvoidingView
+            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+            style={styles.keyboardView}
+          >
+            <ScrollView
+              contentContainerStyle={styles.scrollContent}
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}
+            >
+              <View style={styles.brandRow}>
+                <Text style={styles.brandText}>Gestura</Text>
+              </View>
 
-          <View style={styles.formCardWrap}>
-            <View style={styles.formCard}>
-              <Text style={styles.title}>Register</Text>
-              <View style={styles.signupRow}>
-                <Text style={styles.signupHint}>Already have an account?</Text>
-                <TouchableOpacity onPress={() => router.push('/(tabs)/login')}>
-                  <Text style={styles.signupLink}>Log In</Text>
+              <View style={styles.formCard}>
+                <Text style={styles.title}>Register</Text>
+                <View style={styles.signupRow}>
+                  <Text style={styles.signupHint}>Already have an account?</Text>
+                  <TouchableOpacity onPress={() => router.push('/(tabs)/login')}>
+                    <Text style={styles.signupLink}>Log In</Text>
+                  </TouchableOpacity>
+                </View>
+
+                {errorMessage ? (
+                  <Text style={styles.errorText}>{errorMessage}</Text>
+                ) : null}
+
+                <View style={styles.fieldBlock}>
+                  <Text style={styles.label}>Full Name</Text>
+                  <View style={styles.inputWrap}>
+                    <TextInput
+                      value={fullName}
+                      onChangeText={setFullName}
+                      placeholder="Lois Becket"
+                      placeholderTextColor="#7f8aa4"
+                      autoCapitalize="words"
+                      style={styles.input}
+                    />
+                  </View>
+                </View>
+
+                <View style={styles.fieldBlock}>
+                  <Text style={styles.label}>Email</Text>
+                  <View style={styles.inputWrap}>
+                    <TextInput
+                      value={email}
+                      onChangeText={setEmail}
+                      placeholder="Loisbecket@gmail.com"
+                      placeholderTextColor="#7f8aa4"
+                      autoCapitalize="none"
+                      keyboardType="email-address"
+                      style={styles.input}
+                    />
+                  </View>
+                </View>
+
+                <View style={styles.fieldBlock}>
+                  <Text style={styles.label}>Password</Text>
+                  <View style={styles.inputWrap}>
+                    <TextInput
+                      value={password}
+                      onChangeText={setPassword}
+                      placeholder="********"
+                      placeholderTextColor="#7f8aa4"
+                      secureTextEntry={true}
+                      style={styles.input}
+                    />
+                    <Image
+                      source={require('../../images/eye-off.png')}
+                      style={styles.iconRight}
+                      resizeMode="contain"
+                    />
+                  </View>
+                </View>
+
+                <View style={styles.fieldBlock}>
+                  <Text style={styles.label}>Confirm Password</Text>
+                  <View style={styles.inputWrap}>
+                    <TextInput
+                      value={confirmPassword}
+                      onChangeText={setConfirmPassword}
+                      placeholder="********"
+                      placeholderTextColor="#7f8aa4"
+                      secureTextEntry={true}
+                      style={styles.input}
+                    />
+                    <Image
+                      source={require('../../images/eye-off.png')}
+                      style={styles.iconRight}
+                      resizeMode="contain"
+                    />
+                  </View>
+                </View>
+
+                <TouchableOpacity
+                  style={styles.primaryButton}
+                  onPress={handleRegister}
+                >
+                  <Text style={styles.primaryButtonText}>
+                    {isLoading ? 'Creating...' : 'Create Account'}
+                  </Text>
+                </TouchableOpacity>
+
+                <View style={styles.dividerRow}>
+                  <View style={styles.dividerLine} />
+                  <Text style={styles.dividerText}>Or</Text>
+                  <View style={styles.dividerLine} />
+                </View>
+
+                <TouchableOpacity style={styles.googleButton}>
+                  <Image
+                    source={require('../../images/google.png')}
+                    style={styles.googleIcon}
+                    resizeMode="contain"
+                  />
+                  <Text style={styles.googleText}>Continue with Google</Text>
                 </TouchableOpacity>
               </View>
-
-              {errorMessage ? (
-                <Text style={styles.errorText}>{errorMessage}</Text>
-              ) : null}
-
-              <View style={styles.fieldBlock}>
-                <Text style={styles.label}>Full Name</Text>
-                <View style={styles.inputWrap}>
-                  <TextInput
-                    value={fullName}
-                    onChangeText={setFullName}
-                    placeholder="Lois Becket"
-                    placeholderTextColor="#7f8aa4"
-                    autoCapitalize="words"
-                    style={styles.input}
-                  />
-                </View>
-              </View>
-
-              <View style={styles.fieldBlock}>
-                <Text style={styles.label}>Email</Text>
-                <View style={styles.inputWrap}>
-                  <TextInput
-                    value={email}
-                    onChangeText={setEmail}
-                    placeholder="Loisbecket@gmail.com"
-                    placeholderTextColor="#7f8aa4"
-                    autoCapitalize="none"
-                    keyboardType="email-address"
-                    style={styles.input}
-                  />
-                </View>
-              </View>
-
-              <View style={styles.fieldBlock}>
-                <Text style={styles.label}>Password</Text>
-                <View style={styles.inputWrap}>
-                  <TextInput
-                    value={password}
-                    onChangeText={setPassword}
-                    placeholder="********"
-                    placeholderTextColor="#7f8aa4"
-                    secureTextEntry={true}
-                    style={styles.input}
-                  />
-                  <Image
-                    source={require('../../images/eye-off.png')}
-                    style={styles.iconRight}
-                    resizeMode="contain"
-                  />
-                </View>
-              </View>
-
-              <View style={styles.fieldBlock}>
-                <Text style={styles.label}>Re-confirm Password</Text>
-                <View style={styles.inputWrap}>
-                  <TextInput
-                    value={confirmPassword}
-                    onChangeText={setConfirmPassword}
-                    placeholder="********"
-                    placeholderTextColor="#7f8aa4"
-                    secureTextEntry={true}
-                    style={styles.input}
-                  />
-                  <Image
-                    source={require('../../images/eye-off.png')}
-                    style={styles.iconRight}
-                    resizeMode="contain"
-                  />
-                </View>
-              </View>
-
-              <TouchableOpacity style={styles.primaryButton} onPress={handleRegister}>
-                <Text style={styles.primaryButtonText}>
-                  {isLoading ? 'Creating...' : 'Create Account'}
-                </Text>
-              </TouchableOpacity>
-
-              <View style={styles.dividerRow}>
-                <View style={styles.dividerLine} />
-                <Text style={styles.dividerText}>Or</Text>
-                <View style={styles.dividerLine} />
-              </View>
-
-              <TouchableOpacity style={styles.googleButton}>
-                <Image
-                  source={require('../../images/google.png')}
-                  style={styles.googleIcon}
-                  resizeMode="contain"
-                />
-                <Text style={styles.googleText}>Continue with Google</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
+            </ScrollView>
+          </KeyboardAvoidingView>
         </SafeAreaView>
       </ImageBackground>
     </View>
@@ -188,16 +203,20 @@ const styles = {
   safeArea: {
     flex: 1,
     paddingHorizontal: 16,
-    paddingTop: 16,
-    paddingBottom: 20,
+  },
+  keyboardView: {
+    flex: 1,
+  },
+  scrollContent: {
+    flexGrow: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingTop: 28,
+    paddingBottom: 28,
   },
   brandRow: {
-    position: 'absolute',
-    top: 160,
-    left: 0,
-    right: 0,
     alignItems: 'center',
-    zIndex: 2,
+    marginBottom: 22,
   },
   brandText: {
     fontSize: 28,
@@ -205,18 +224,11 @@ const styles = {
     color: '#ffffff',
     textAlign: 'center',
   },
-  formCardWrap: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingTop: 64,
-  },
   formCard: {
     backgroundColor: '#f8fbff',
     borderRadius: 20,
-    paddingHorizontal: 16,
-    paddingVertical: 18,
+    paddingHorizontal: 18,
+    paddingVertical: 24,
     width: '100%',
     maxWidth: 380,
     shadowColor: 'rgba(12, 29, 64, 0.22)',
@@ -255,7 +267,7 @@ const styles = {
     fontWeight: '600',
   },
   fieldBlock: {
-    marginBottom: 12,
+    marginBottom: 10,
   },
   label: {
     color: '#5b6c8c',
@@ -269,11 +281,14 @@ const styles = {
     borderRadius: 12,
     backgroundColor: '#ffffff',
     paddingHorizontal: 14,
-    paddingVertical: 10,
+    minHeight: 44,
+    justifyContent: 'center',
   },
   input: {
     color: '#16233d',
     fontSize: 14,
+    lineHeight: 18,
+    paddingVertical: 0,
     paddingRight: 30,
   },
   iconRight: {

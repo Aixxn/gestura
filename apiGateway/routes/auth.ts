@@ -4,6 +4,8 @@ import jwt from 'jsonwebtoken';
 import { MongoClient, ObjectId } from 'mongodb';
 import { IUser, AuthRequest, RegisterInput } from 'types/index';
 import { requireAuth } from 'middleware/auth';
+import logger from 'services/logger';
+import { withLogging } from 'middleware/logging';
 
 const authRouter = express.Router();
 
@@ -23,7 +25,7 @@ async function getDb(): Promise<any> {
   client = new MongoClient(uri);
   await client.connect();
   db = client.db(DB_NAME);
-  console.log('Connected to MongoDB');
+  logger.info('Connected to MongoDB');
   return db;
 }
 
@@ -43,7 +45,7 @@ function sanitizeUser(user: any) {
   };
 }
 
-authRouter.post('/register', async (req, res) => {
+authRouter.post('/register', withLogging(async (req, res) => {
   try {
     const database = await getDb();
     const { email, password, full_name } = req.body as RegisterInput;
@@ -88,12 +90,12 @@ authRouter.post('/register', async (req, res) => {
       user: sanitizeUser(newUser),
     });
   } catch (error) {
-    console.error('Registration error:', error);
+    logger.error('Registration error', { error });
     res.status(500).json({ success: false, message: 'Registration error' });
   }
-});
+}, 'auth.register'));
 
-authRouter.post('/login', async (req, res) => {
+authRouter.post('/login', withLogging(async (req, res) => {
   try {
     const database = await getDb();
     const { email, password } = req.body;
@@ -126,16 +128,16 @@ authRouter.post('/login', async (req, res) => {
       user: sanitizeUser(user),
     });
   } catch (error) {
-    console.error('Login error:', error);
+    logger.error('Login error', { error });
     res.status(500).json({ success: false, message: 'Login error' });
   }
-});
+}, 'auth.login'));
 
-authRouter.post('/logout', (_req, res) => {
+authRouter.post('/logout', withLogging((_req, res) => {
   res.json({ success: true, message: 'Logout successful' });
-});
+}, 'auth.logout'));
 
-authRouter.get('/me', requireAuth, async (req: AuthRequest, res) => {
+authRouter.get('/me', requireAuth, withLogging(async (req: AuthRequest, res) => {
   try {
     const database = await getDb();
     const user = await database.collection(USERS_COLLECTION).findOne(
@@ -150,9 +152,9 @@ authRouter.get('/me', requireAuth, async (req: AuthRequest, res) => {
 
     res.json({ success: true, user: sanitizeUser(user) });
   } catch (error) {
-    console.error('Get profile error:', error);
+    logger.error('Get profile error', { error });
     res.status(500).json({ success: false, message: 'Failed to get user profile' });
   }
-});
+}, 'auth.me'));
 
 export default authRouter;

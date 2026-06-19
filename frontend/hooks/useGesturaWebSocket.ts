@@ -24,6 +24,7 @@ export const useGesturaWebSocket = ({
   maxReconnectAttempts = 5,
 }: UseGesturaWebSocketProps) => {
   const [translation, setTranslation] = useState<string>('');
+  const [aslGloss, setAslGloss] = useState<string>('');
   const [state, setState] = useState<WebSocketState>({
     isConnected: false,
     isConnecting: false,
@@ -95,19 +96,23 @@ export const useGesturaWebSocket = ({
           console.log('WebSocket: Raw message received:', parsed);
 
           const payloadUuid = parsed?.uuid;
-          const sentence = parsed?.sentence ?? parsed?.translation ?? parsed?.text;
 
           if (payloadUuid && payloadUuid !== uuid) {
             console.log('WebSocket: Ignoring message for different UUID:', payloadUuid);
             return;
           }
 
-          if (!sentence || sentence === 'null') {
-            console.log('WebSocket: Received empty/null sentence — skipping');
+          const english = parsed?.english;
+          if (!english) {
+            console.log('WebSocket: No english field in message — skipping');
             return;
           }
 
-          setTranslation(String(sentence));
+          if (parsed?.asl_gloss) {
+            setAslGloss(String(parsed.asl_gloss));
+          }
+
+          setTranslation(String(english));
         } catch (err) {
           console.error('WebSocket: Failed to parse incoming message:', err, event.data);
         }
@@ -193,6 +198,7 @@ export const useGesturaWebSocket = ({
     });
 
     setTranslation('');
+    setAslGloss('');
   }, []);
 
   const reconnect = useCallback(() => {
@@ -206,6 +212,7 @@ export const useGesturaWebSocket = ({
 
   const clearTranslation = useCallback(() => {
     setTranslation('');
+    setAslGloss('');
   }, []);
 
   useEffect(() => {
@@ -227,6 +234,7 @@ export const useGesturaWebSocket = ({
 
   return {
     translation,
+    aslGloss,
     isConnected: state.isConnected,
     isConnecting: state.isConnecting,
     error: state.error,
