@@ -5,6 +5,8 @@ import axios from 'axios';
 import jwt from 'jsonwebtoken';
 import { requireAuth } from 'middleware/auth';
 import { AuthRequest, JwtPayload } from 'types/index';
+import logger from 'services/logger';
+import { withLogging, setupWsLogging } from 'middleware/logging';
 
 const WEB_SOCKET_HOST = process.env.WEB_SOCKET_HOST || '0.0.0.0';
 const WEB_SOCKET_PORT = parseInt(process.env.WEB_SOCKET_PORT || '9898');
@@ -43,21 +45,21 @@ wss.on('connection', async (ws, req) => {
 
   ws.on('close', async () => {
     sessionMap.delete(clientUuid);
-    console.log(`Client ${clientUuid} has disconnected.`);
   });
 
   sessionMap.set(clientUuid, ws);
-  console.log(`Client ${clientUuid} has connected.`);
 });
 
+setupWsLogging(wss);
+
 // endpoints
-translationRouter.get('/stop/:uuid', requireAuth, async (req: AuthRequest, res) => {
+translationRouter.get('/stop/:uuid', requireAuth, withLogging(async (req: AuthRequest, res) => {
   const gatewayStopReceivedAt = Date.now();
   const uuid = req.params.uuid;
   const ws = sessionMap.get(uuid);
 
   if (!uuid) {
-    console.error('No uuid sent.')
+    logger.warn('No uuid sent.')
     res.status(400).send({ message: 'No uuid has been sent to the server.' })
     return
   }
@@ -98,30 +100,30 @@ translationRouter.get('/stop/:uuid', requireAuth, async (req: AuthRequest, res) 
       ws.send(JSON.stringify(result));
     }
 
-    console.log('[LATENCY] /api/stop timing:', {
+    logger.info('[LATENCY] /api/stop timing:', {
       uuid,
       ...timing,
     });
 
     res.status(200).send('Successfully finished sequence.');
   } catch (e) {
-    console.error('Error:', e);
+    logger.error('Failed to process sequence', { error: e });
     res.status(500).send({ message: 'Failed to process sequence.' })
   }
-});
+}, 'api.stop'));
 
-translationRouter.post('/convert', requireAuth, upload.single('rawImage'), async (req: AuthRequest, res) => {
+translationRouter.post('/convert', requireAuth, upload.single('rawImage'), withLogging(async (req: AuthRequest, res) => {
   const gatewayReceivedAt = Date.now();
   const file = req.file
   const uuid = req.body.uuid
 
   if (!file) {
-    console.error('No data uploaded');
+    logger.warn('No data uploaded');
     res.status(400).send({ message: 'No file has been sent to the server' });
     return
   }
   if (!uuid) {
-    console.error('No uuid sent');
+    logger.warn('No uuid sent');
     res.status(400).send({ message: 'No uuid sent to the server.' });
     return;
   }
@@ -153,7 +155,7 @@ translationRouter.post('/convert', requireAuth, upload.single('rawImage'), async
       upload_bytes: file.size,
     };
 
-    console.log('[LATENCY] /api/convert timing:', {
+    logger.info('[LATENCY] /api/convert timing:', {
       uuid,
       status: responseData.status,
       ...timing,
@@ -164,9 +166,9 @@ translationRouter.post('/convert', requireAuth, upload.single('rawImage'), async
       timing,
     });
   } catch (e) {
-    console.error('Error failed to send data to translation service:', e)
+    logger.error('Failed to send data to translation service', { error: e })
     res.status(500).send({ message: 'Failed to process image. ' })
   }
-});
+}, 'api.convert'));
 
 export default translationRouter;

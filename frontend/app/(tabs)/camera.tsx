@@ -17,10 +17,10 @@ import { enqueueLiveFrame, type FrameQueueItem } from '../../utils/frameQueuePol
 type QueuedFrame = FrameQueueItem;
 
 const SNAPSHOT_QUALITY = 60;
-const CAPTURE_INTERVAL_MS = 100;
-const MAX_LIVE_QUEUE_SIZE = 80;
+const CAPTURE_INTERVAL_MS = 67;
+const MAX_LIVE_QUEUE_SIZE = 300;
 const STOP_SETTLE_MS = 1800;
-const CONCURRENT_UPLOADS = 1;
+const CONCURRENT_UPLOADS = 3;
 
 const wait = (durationMs: number) =>
   new Promise((resolve) => {
